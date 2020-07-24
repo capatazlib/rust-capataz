@@ -4,6 +4,7 @@ pkgs.mkShell {
   buildInputs = with pkgs; [
     figlet
     stdenv
+    cacert
     mozilla-rust
     rust-analyzer
   ];
