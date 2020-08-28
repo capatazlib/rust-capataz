@@ -1,15 +1,7 @@
+pub use futures::future::AbortHandle;
+
 use futures::future::{pending, BoxFuture, FutureExt, Shared};
 use tokio::time::Duration;
-
-pub struct CancelHandle {
-    cancel_fn: Box<dyn FnOnce()>,
-}
-
-impl CancelHandle {
-    pub fn cancel(self) {
-        (self.cancel_fn)();
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct Context {
@@ -23,19 +15,17 @@ impl Context {
         }
     }
 
-    pub fn with_cancel(&self) -> (Self, CancelHandle) {
-        let (done0, canceler) = futures::future::abortable(self.done.clone());
+    pub fn with_cancel(&self) -> (Self, AbortHandle) {
+        let (done0, aborter) = futures::future::abortable(self.done.clone());
         let done = done0.map(|_| ()).boxed().shared();
-        let cancel_fn = Box::new(move || { canceler.abort() });
-        (Self { done }, CancelHandle { cancel_fn })
+        (Self { done }, aborter)
     }
 
-    pub fn with_timeout(&self, timeout: Duration) -> (Self, CancelHandle) {
+    pub fn with_timeout(&self, timeout: Duration) -> (Self, AbortHandle) {
         let done0 = tokio::time::timeout(timeout, self.done.clone());
-        let (done1, canceler) = futures::future::abortable(done0);
+        let (done1, aborter) = futures::future::abortable(done0);
         let done = done1.map(|_| ()).boxed().shared();
-        let cancel_fn = Box::new(move || { canceler.abort() });
-        (Self { done }, CancelHandle { cancel_fn })
+        (Self { done }, aborter )
     }
 }
 
@@ -120,7 +110,7 @@ mod tests {
         assert_pending!(fut.poll());
 
         // cancel
-        cancel_timeout.cancel();
+        cancel_timeout.abort();
         assert_ready!(fut.poll());
     }
 
@@ -130,15 +120,15 @@ mod tests {
 
         let ctx0 = Context::new();
 
-        let (ctx1, _cancel_handle1) = ctx0.with_timeout(Duration::from_millis(100));
-        let (ctx2, cancel_handle2) = ctx1.with_timeout(Duration::from_millis(100));
+        let (ctx1, _abort_handle1) = ctx0.with_timeout(Duration::from_millis(100));
+        let (ctx2, abort_handle2) = ctx1.with_timeout(Duration::from_millis(100));
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
         assert_pending!(fut1.poll());
         assert_pending!(fut2.poll());
 
-        cancel_handle2.cancel();
+        abort_handle2.abort();
         assert_pending!(fut1.poll());
         assert_ready!(fut2.poll());
     }
@@ -149,15 +139,15 @@ mod tests {
 
         let ctx0 = Context::new();
 
-        let (ctx1, cancel_handle1) = ctx0.with_timeout(Duration::from_millis(100));
-        let (ctx2, _cancel_handle2) = ctx1.with_timeout(Duration::from_millis(100));
+        let (ctx1, abort_handle1) = ctx0.with_timeout(Duration::from_millis(100));
+        let (ctx2, _abort_handle2) = ctx1.with_timeout(Duration::from_millis(100));
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
         assert_pending!(fut1.poll());
         assert_pending!(fut2.poll());
 
-        cancel_handle1.cancel();
+        abort_handle1.abort();
         assert_ready!(fut1.poll());
         assert_ready!(fut2.poll());
     }
@@ -166,12 +156,12 @@ mod tests {
     async fn test_with_cancel_simple() {
         let ctx0 = Context::new();
 
-        let (ctx, cancel_handle) = ctx0.with_cancel();
+        let (ctx, abort_handle) = ctx0.with_cancel();
 
         let mut fut = task::spawn(ctx.done);
         assert_pending!(fut.poll());
 
-        cancel_handle.cancel();
+        abort_handle.abort();
         assert_ready!(fut.poll());
     }
 
@@ -179,15 +169,15 @@ mod tests {
     async fn test_with_cancel_nested_child_cancel() {
         let ctx0 = Context::new();
 
-        let (ctx1, _cancel_handle1) = ctx0.with_cancel();
-        let (ctx2, cancel_handle2) = ctx1.with_cancel();
+        let (ctx1, _abort_handle1) = ctx0.with_cancel();
+        let (ctx2, abort_handle2) = ctx1.with_cancel();
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
         assert_pending!(fut1.poll());
         assert_pending!(fut2.poll());
 
-        cancel_handle2.cancel();
+        abort_handle2.abort();
 
         assert_pending!(fut1.poll());
         assert_ready!(fut2.poll());
@@ -197,15 +187,15 @@ mod tests {
     async fn test_with_cancel_nested_parent_cancel() {
         let ctx0 = Context::new();
 
-        let (ctx1, cancel_handle1) = ctx0.with_cancel();
-        let (ctx2, _cancel_handle2) = ctx1.with_cancel();
+        let (ctx1, abort_handle1) = ctx0.with_cancel();
+        let (ctx2, _abort_handle2) = ctx1.with_cancel();
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
         assert_pending!(fut1.poll());
         assert_pending!(fut2.poll());
 
-        cancel_handle1.cancel();
+        abort_handle1.abort();
 
         assert_ready!(fut1.poll());
         assert_ready!(fut2.poll());
