@@ -84,8 +84,8 @@ mod tests {
 
         let ctx0 = Context::new();
 
-        let (ctx1, _cancel_timeout1) = Context::with_timeout(&ctx0, Duration::from_millis(100));
-        let (ctx2, _cancel_timeout2) = Context::with_timeout(&ctx1, Duration::from_millis(50));
+        let (ctx1, _cancel_timeout1) = ctx0.with_timeout(Duration::from_millis(100));
+        let (ctx2, _cancel_timeout2) = ctx1.with_timeout(Duration::from_millis(50));
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
@@ -131,7 +131,7 @@ mod tests {
 
         let ctx0 = Context::new();
 
-        let (ctx, cancel_timeout) = Context::with_timeout(&ctx0, Duration::from_millis(100));
+        let (ctx, cancel_timeout) = ctx0.with_timeout(Duration::from_millis(100));
 
         let mut fut = task::spawn(ctx.done);
         assert_pending!(fut.poll());
