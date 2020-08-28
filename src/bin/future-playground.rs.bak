@@ -1,0 +1,309 @@
+use futures::channel::oneshot;
+
+use futures::future::{pending, select, BoxFuture, FutureExt, Shared};
+use tokio::spawn;
+use tokio::sync::mpsc;
+use tokio::time::{delay_for, Duration};
+
+pub struct CancelHandle {
+    cancel_fn: Box<dyn FnOnce()>,
+}
+
+impl CancelHandle {
+    pub fn cancel(self) {
+        let _ = (self.cancel_fn)();
+    }
+}
+
+#[derive(Clone)]
+pub struct Context {
+    pub done: Shared<BoxFuture<'static, ()>>,
+}
+
+impl Context {
+    pub fn new() -> Context {
+        Context {
+            done: pending().boxed().shared(),
+        }
+    }
+
+    pub fn with_cancel(ctx: &Context) -> (Context, CancelHandle) {
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        let parent_done = ctx.done.clone();
+        let done = select(parent_done, cancel_rx).map(|_| ()).boxed().shared();
+        let cancel_fn = Box::new(move || {
+            let _ = cancel_tx.send(());
+        });
+        (Context { done }, CancelHandle { cancel_fn })
+    }
+
+    pub fn with_timeout(ctx: &Context, timeout: Duration) -> (Context, CancelHandle) {
+        let (mut cancel_tx, mut cancel_rx) = mpsc::channel::<()>(2);
+        let cancel_fn = Box::new(move || {
+            let _ = cancel_tx.send(());
+        });
+
+        let parent_done = ctx.done.clone();
+        let done = async move {
+            tokio::select! {
+                _ = parent_done => (),
+                _ = delay_for(timeout) => (),
+                _ = cancel_rx.recv() => (),
+            }
+        }
+        .boxed()
+        .shared();
+
+        (Context { done }, CancelHandle { cancel_fn })
+    }
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_timeout_completion() {
+    use tokio::time;
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    time::pause();
+
+    let ctx0 = Context::new();
+
+    let (ctx, _cancel_timeout) = Context::with_timeout(&ctx0, Duration::from_millis(100));
+
+    let mut fut = task::spawn(ctx.done);
+    assert_pending!(fut.poll());
+
+    // fast-forward
+    time::advance(Duration::from_millis(101)).await;
+    assert_ready!(fut.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_timeout_nested_child_completion() {
+    use tokio::time;
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    time::pause();
+
+    let ctx0 = Context::new();
+
+    let (ctx1, _cancel_timeout1) = Context::with_timeout(&ctx0, Duration::from_millis(100));
+    let (ctx2, _cancel_timeout2) = Context::with_timeout(&ctx1, Duration::from_millis(50));
+
+    let mut fut1 = task::spawn(ctx1.done);
+    let mut fut2 = task::spawn(ctx2.done);
+
+    assert_pending!(fut1.poll());
+    assert_pending!(fut2.poll());
+
+    // fast-forward
+    time::advance(Duration::from_millis(60)).await;
+    assert_pending!(fut1.poll());
+    assert_ready!(fut2.poll());
+
+    // fast-forward
+    time::advance(Duration::from_millis(41)).await;
+    assert_ready!(fut1.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_timeout_nested_parent_completion() {
+    use tokio::time;
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    time::pause();
+
+    let ctx0 = Context::new();
+
+    let (ctx1, _cancel_timeout1) = Context::with_timeout(&ctx0, Duration::from_millis(50));
+    let (ctx2, _cancel_timeout2) = Context::with_timeout(&ctx1, Duration::from_millis(100));
+
+    let mut fut1 = task::spawn(ctx1.done);
+    let mut fut2 = task::spawn(ctx2.done);
+
+    assert_pending!(fut1.poll());
+    assert_pending!(fut2.poll());
+
+    // fast-forward
+    time::advance(Duration::from_millis(60)).await;
+    // both should have finished, parent context is smaller on its timeout
+    assert_ready!(fut1.poll());
+    assert_ready!(fut2.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_timeout_cancelation_simple() {
+    use tokio::time;
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    time::pause();
+
+    let ctx0 = Context::new();
+
+    let (ctx, cancel_timeout) = Context::with_timeout(&ctx0, Duration::from_millis(100));
+
+    let mut fut = task::spawn(ctx.done);
+    assert_pending!(fut.poll());
+
+    // cancel
+    cancel_timeout.cancel();
+    assert_ready!(fut.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_timeout_nested_child_cancel() {
+    use tokio::time;
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    time::pause();
+
+    let ctx0 = Context::new();
+
+    let (ctx1, _cancel_handle1) = Context::with_timeout(&ctx0, Duration::from_millis(100));
+    let (ctx2, cancel_handle2) = Context::with_timeout(&ctx1, Duration::from_millis(100));
+
+    let mut fut1 = task::spawn(ctx1.done);
+    let mut fut2 = task::spawn(ctx2.done);
+    assert_pending!(fut1.poll());
+    assert_pending!(fut2.poll());
+
+    cancel_handle2.cancel();
+    assert_pending!(fut1.poll());
+    assert_ready!(fut2.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_timeout_nested_parent_cancel() {
+    use tokio::time;
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    time::pause();
+
+    let ctx0 = Context::new();
+
+    let (ctx1, cancel_handle1) = Context::with_timeout(&ctx0, Duration::from_millis(100));
+    let (ctx2, _cancel_handle2) = Context::with_timeout(&ctx1, Duration::from_millis(100));
+
+    let mut fut1 = task::spawn(ctx1.done);
+    let mut fut2 = task::spawn(ctx2.done);
+    assert_pending!(fut1.poll());
+    assert_pending!(fut2.poll());
+
+    cancel_handle1.cancel();
+    assert_ready!(fut1.poll());
+    assert_ready!(fut2.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_cancel_simple() {
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    let ctx0 = Context::new();
+
+    let (ctx, cancel_handle) = Context::with_cancel(&ctx0);
+
+    let mut fut = task::spawn(ctx.done);
+    assert_pending!(fut.poll());
+
+    cancel_handle.cancel();
+    assert_ready!(fut.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_cancel_nested_child_cancel() {
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    let ctx0 = Context::new();
+
+    let (ctx1, _cancel_handle1) = Context::with_cancel(&ctx0);
+    let (ctx2, cancel_handle2) = Context::with_cancel(&ctx1);
+
+    let mut fut1 = task::spawn(ctx1.done);
+    let mut fut2 = task::spawn(ctx2.done);
+    assert_pending!(fut1.poll());
+    assert_pending!(fut2.poll());
+
+    cancel_handle2.cancel();
+
+    assert_pending!(fut1.poll());
+    assert_ready!(fut2.poll());
+}
+
+#[tokio::test]
+#[cfg(test)]
+async fn test_with_cancel_nested_parent_cancel() {
+    use tokio_test::{assert_pending, assert_ready, task};
+
+    let ctx0 = Context::new();
+
+    let (ctx1, cancel_handle1) = Context::with_cancel(&ctx0);
+    let (ctx2, _cancel_handle2) = Context::with_cancel(&ctx1);
+
+    let mut fut1 = task::spawn(ctx1.done);
+    let mut fut2 = task::spawn(ctx2.done);
+    assert_pending!(fut1.poll());
+    assert_pending!(fut2.poll());
+
+    cancel_handle1.cancel();
+
+    assert_ready!(fut1.poll());
+    assert_ready!(fut2.poll());
+}
+
+#[tokio::main]
+async fn main() {
+    let ctx = Context::new();
+    let (ctx1, _cancel_handle1) = Context::with_cancel(&ctx);
+    let (ctx2, cancel_handle2) = Context::with_cancel(&ctx1);
+    let (ctx3, _cancel_timeout) = Context::with_timeout(&ctx, Duration::from_secs(1));
+
+    // let pctx1 = ctx.clone();
+    let pctx2 = ctx.clone();
+
+    let join_handle1 = spawn(async {
+        tokio::select! {
+            _ = ctx3.done => {
+                println!("join_handle1: nope");
+            },
+            _ = ctx1.done => {
+                println!("join_handle1: yes");
+            },
+        }
+    });
+
+    let join_handle2 = spawn(async {
+        tokio::select! {
+            _ = pctx2.done => {
+                println!("join_handle2: nope");
+            },
+            _ = ctx2.done => {
+                println!("join_handle2: yes")
+            }
+        }
+    });
+
+    cancel_handle2.cancel();
+
+    let r2 = join_handle2.await;
+    println!("{:?}", r2);
+    let r1 = join_handle1.await;
+    println!("{:?}", r1);
+
+    // let f1 = async { Ok::<String, ()>("Hello World".to_owned()) };
+    // let f1 = async { Err::<String, i32>(666) };
+    // let f2 = async { Ok::<String, ()>("Hola Mundo".to_owned()) };
+    // let result = f1
+    //     .or_else(|x| {
+    //         println!("{}", x);
+    //         f2
+    //     })
+    //     .await;
+    // println!("{:?}", result);
+}

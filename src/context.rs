@@ -13,7 +13,7 @@ impl CancelHandle {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Context {
     pub done: Shared<BoxFuture<'static, ()>>,
 }
@@ -36,7 +36,7 @@ impl Context {
     }
 
     pub fn with_timeout(ctx: &Context, timeout: Duration) -> (Context, CancelHandle) {
-        let (mut cancel_tx, mut cancel_rx) = mpsc::channel::<()>(2);
+        let (mut cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
         let cancel_fn = Box::new(move || {
             let _ = cancel_tx.send(());
         });

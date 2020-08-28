@@ -1,0 +1,198 @@
+pub mod capataz {
+
+    pub mod ctx {
+        use futures::{Future, FutureExt, TryFuture, TryFutureExt};
+        use tokio::sync::watch;
+
+        pub struct ContextCancelHandle;
+
+        impl ContextCancelHandle {
+            pub async fn cancel(self) {
+            }
+        }
+
+        pub struct Context {
+            done_signal: dyn Future<Output=()>,
+        }
+
+        impl Context {
+            pub fn new() -> Context {
+                Context { done_signal: (|| async { () })() }
+            }
+            pub fn with_cancel(parent_ctx: &Context) -> (Context, ContextCancelHandle) {
+                let (tx, rx0) = watch::channel(1);
+                let ft1 = rx0.recv().shared();
+                let ft2 = ft1.clone();
+                let ctx = Context {
+                    done_signal: parent_ctx.done_signal.map_or(ft1, |ft| ft.or_else(ft2)),
+                };
+                unimplemented!()
+            }
+        }
+
+        // TODO: google how to test futures
+        // #[cfg(test)]
+        // mod tests {
+        //     use crate::capataz::ctx::Context;
+        //     #[test]
+        //     fn with_cancel() {
+        //         let ctx = Context::new();
+        //         let (ctx1, cancel) = Context::with_cancel(&ctx);
+        //     }
+        // }
+    }
+
+//     use std::boxed::Box;
+//     use std::cmp::PartialEq;
+//     use std::future::Future;
+//     use std::time::Duration;
+
+//     use anyhow::Error;
+//     use chrono::{DateTime, Utc};
+//     use futures::future::{AbortHandle, Abortable, Aborted};
+//     use tokio::task::JoinHandle;
+
+//     pub use crate::capataz::ctx::*;
+
+//     #[derive(Debug, PartialEq, Clone, Copy)]
+//     pub enum WorkerRestart {
+//         Permanent,
+//         Transient,
+//         Temporary,
+//     }
+
+//     #[derive(Debug, PartialEq, Clone)]
+//     pub enum WorkerShutdown {
+//         Indefinitely,
+//         Timeout(Duration),
+//     }
+
+//     pub struct WorkerOpt<O>(Box<dyn FnOnce(&mut WorkerSpec<O>)>);
+
+//     pub mod worker {
+//         use super::{WorkerOpt, WorkerRestart, WorkerShutdown};
+
+//         pub fn restart<O>(restart: WorkerRestart) -> WorkerOpt<O> {
+//             WorkerOpt(Box::new(move |mut spec| spec.restart = restart))
+//         }
+
+//         pub fn shutdown<O>(shutdown: WorkerShutdown) -> WorkerOpt<O> {
+//             WorkerOpt(Box::new(move |mut spec| spec.shutdown = shutdown))
+//         }
+//     }
+
+//     pub struct WorkerSpec<O> {
+//         pub name: String,
+//         pub restart: WorkerRestart,
+//         pub shutdown: WorkerShutdown,
+//         routine: Box<dyn Fn(Context) -> O>,
+//     }
+
+//     impl<O> WorkerSpec<O>
+//     where
+//         O: Future<Output = Result<(), Error>> + Send + Sized + 'static,
+//     {
+//         pub fn new<F>(name0: &str, routine0: F) -> WorkerSpec<O>
+//         where
+//             F: Fn(Context) -> O + 'static,
+//         {
+//             let routine = Box::new(routine0);
+//             return WorkerSpec {
+//                 name: name0.to_owned(),
+//                 routine,
+//                 shutdown: WorkerShutdown::Indefinitely,
+//                 restart: WorkerRestart::Permanent,
+//             };
+//         }
+
+//         pub fn new_with<F>(name0: &str, opts: Vec<WorkerOpt<O>>, routine0: F) -> WorkerSpec<O>
+//         where
+//             F: Fn(Context) -> O + 'static,
+//         {
+//             let mut spec = Self::new(name0, routine0);
+//             for opt_fn in opts {
+//                 opt_fn.0(&mut spec);
+//             }
+//             spec
+//         }
+
+//         pub async fn start<'a>(&'a self, parent_ctx: &Context, parent_name: &str) -> Worker {
+//             use tokio::task::spawn;
+
+//             let runtime_name = format!("{}/{}", parent_name, self.name);
+//             let created_at = Utc::now();
+
+//             // cancel and kill initialization
+
+//             let (ctx, cancel_handle) = Context::with_cancel(parent_ctx);
+
+//             let (abort_handle, abort_registration) = AbortHandle::new_pair();
+//             let routine = Abortable::new((*self.routine)(ctx), abort_registration);
+
+//             let join_handle = spawn(routine);
+
+//             Worker {
+//                 runtime_name,
+//                 created_at,
+//                 join_handle,
+//                 cancel_handle,
+//                 abort_handle,
+//             }
+//         }
+//     }
+
+//     pub struct Worker {
+//         pub runtime_name: String,
+//         pub created_at: DateTime<Utc>,
+//         join_handle: JoinHandle<Result<Result<(), anyhow::Error>, Aborted>>,
+//         cancel_handle: ContextCancelHandle,
+//         abort_handle: AbortHandle,
+//     }
+
+//     impl Worker {
+//         pub async fn cancel(self) {
+//             self.cancel_handle.cancel();
+//             let _ = self.join_handle.await;
+
+//             // use tokio::time;
+//             // // TODO: Do timeout and use abort in case is not met
+//             // let mut delay = time::delay_for(time::Duration::from_millis(1000));
+//             // tokio::select! {
+//             //    _ = &mut delay => {
+//             //        self.abort_handle.abort();
+//             //    },
+//             //    _ = self.join_handle.await => {
+//             //        return ();
+//             //    }
+//             // }
+//         }
+//     }
+// }
+
+// #[cfg(test)]
+// mod tests {
+
+//     #[test]
+//     fn worker_new_with() {
+//         use crate::capataz::worker::{restart, shutdown};
+//         use crate::capataz::WorkerRestart::Temporary;
+//         use crate::capataz::WorkerShutdown::Timeout;
+//         use crate::capataz::{Context, WorkerSpec};
+//         use std::time::Duration;
+
+//         let worker = WorkerSpec::new_with(
+//             "hello-world",
+//             vec![
+//                 restart(Temporary),
+//                 shutdown(Timeout(Duration::from_secs(1))),
+//             ],
+//             |_ctx: Context| async {
+//                 println!("hello world");
+//                 Ok(())
+//             },
+//         );
+//         assert_eq!(worker.name, "hello-world");
+//         assert_eq!(worker.restart, Temporary);
+//         assert_eq!(worker.shutdown, Timeout(Duration::from_secs(1)))
+//     }
+// }
