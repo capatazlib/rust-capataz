@@ -13,7 +13,7 @@ impl CancelHandle {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Context {
     pub done: Shared<BoxFuture<'static, ()>>,
 }
