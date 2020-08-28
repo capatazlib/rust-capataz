@@ -9,7 +9,7 @@ pub struct CancelHandle {
 
 impl CancelHandle {
     pub fn cancel(self) {
-        let _ = (self.cancel_fn)();
+        (self.cancel_fn)();
     }
 }
 
