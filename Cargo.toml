@@ -10,7 +10,8 @@ edition = "2018"
 anyhow  = { version = "1.0.31" }
 chrono  = { version = "0.4.13" }
 futures = { version = "0.3.5"  }
-tokio   = { version = "0.2.22", features = ["rt-core", "sync", "macros", "time", "test-util"] }
+tokio   = { version = "0.2.22", features = ["rt-core", "sync", "macros", "time"] }
 
 [dev-dependencies]
+tokio = { version = "0.2.22", features = ["test-util"] }
 tokio-test = { version = "0.2.1" }
