@@ -1,7 +1,5 @@
-use futures::channel::oneshot;
-use futures::future::{pending, select, BoxFuture, FutureExt, Shared};
-use tokio::sync::mpsc;
-use tokio::time::{delay_for, Duration};
+use futures::future::{pending, BoxFuture, FutureExt, Shared};
+use tokio::time::Duration;
 
 pub struct CancelHandle {
     cancel_fn: Box<dyn FnOnce()>,
@@ -26,32 +24,17 @@ impl Context {
     }
 
     pub fn with_cancel(&self) -> (Self, CancelHandle) {
-        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-        let parent_done = self.done.clone();
-        let done = select(parent_done, cancel_rx).map(|_| ()).boxed().shared();
-        let cancel_fn = Box::new(move || {
-            let _ = cancel_tx.send(());
-        });
+        let (done0, canceler) = futures::future::abortable(self.done.clone());
+        let done = done0.map(|_| ()).boxed().shared();
+        let cancel_fn = Box::new(move || { canceler.abort() });
         (Self { done }, CancelHandle { cancel_fn })
     }
 
     pub fn with_timeout(&self, timeout: Duration) -> (Self, CancelHandle) {
-        let (mut cancel_tx, mut cancel_rx) = mpsc::channel::<()>(2);
-        let cancel_fn = Box::new(move || {
-            let _ = cancel_tx.send(());
-        });
-
-        let parent_done = self.done.clone();
-        let done = async move {
-            tokio::select! {
-                _ = parent_done => (),
-                _ = delay_for(timeout) => (),
-                _ = cancel_rx.recv() => (),
-            }
-        }
-        .boxed()
-        .shared();
-
+        let done0 = tokio::time::timeout(timeout, self.done.clone());
+        let (done1, canceler) = futures::future::abortable(done0);
+        let done = done1.map(|_| ()).boxed().shared();
+        let cancel_fn = Box::new(move || { canceler.abort() });
         (Self { done }, CancelHandle { cancel_fn })
     }
 }
