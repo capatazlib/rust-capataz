@@ -16,15 +16,15 @@ impl Context {
     }
 
     pub fn with_cancel(&self) -> (Self, AbortHandle) {
-        let (done0, aborter) = futures::future::abortable(self.done.clone());
-        let done = done0.map(|_| ()).boxed().shared();
+        let (done, aborter) = futures::future::abortable(self.done.clone());
+        let done = done.map(|_| ()).boxed().shared();
         (Self { done }, aborter)
     }
 
     pub fn with_timeout(&self, timeout: Duration) -> (Self, AbortHandle) {
-        let done0 = tokio::time::timeout(timeout, self.done.clone());
-        let (done1, aborter) = futures::future::abortable(done0);
-        let done = done1.map(|_| ()).boxed().shared();
+        let done = tokio::time::timeout(timeout, self.done.clone());
+        let (done, aborter) = futures::future::abortable(done);
+        let done = done.map(|_| ()).boxed().shared();
         (Self { done }, aborter )
     }
 }
@@ -39,9 +39,9 @@ mod tests {
     async fn test_with_timeout_completion() {
         time::pause();
 
-        let ctx0 = Context::new();
+        let ctx = Context::new();
 
-        let (ctx, _cancel_timeout) = ctx0.with_timeout(Duration::from_millis(100));
+        let (ctx, _abort_timeout) = ctx.with_timeout(Duration::from_millis(100));
 
         let mut fut = task::spawn(ctx.done);
         assert_pending!(fut.poll());
@@ -57,8 +57,8 @@ mod tests {
 
         let ctx0 = Context::new();
 
-        let (ctx1, _cancel_timeout1) = ctx0.with_timeout(Duration::from_millis(100));
-        let (ctx2, _cancel_timeout2) = ctx1.with_timeout(Duration::from_millis(50));
+        let (ctx1, _abort_timeout1) = ctx0.with_timeout(Duration::from_millis(100));
+        let (ctx2, _abort_timeout2) = ctx1.with_timeout(Duration::from_millis(50));
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
@@ -82,8 +82,8 @@ mod tests {
 
         let ctx0 = Context::new();
 
-        let (ctx1, _cancel_timeout1) = ctx0.with_timeout(Duration::from_millis(50));
-        let (ctx2, _cancel_timeout2) = ctx1.with_timeout(Duration::from_millis(100));
+        let (ctx1, _abort_timeout1) = ctx0.with_timeout(Duration::from_millis(50));
+        let (ctx2, _abort_timeout2) = ctx1.with_timeout(Duration::from_millis(100));
 
         let mut fut1 = task::spawn(ctx1.done);
         let mut fut2 = task::spawn(ctx2.done);
@@ -102,15 +102,15 @@ mod tests {
     async fn test_with_timeout_cancelation_simple() {
         time::pause();
 
-        let ctx0 = Context::new();
+        let ctx = Context::new();
 
-        let (ctx, cancel_timeout) = ctx0.with_timeout(Duration::from_millis(100));
+        let (ctx, abort_timeout) = ctx.with_timeout(Duration::from_millis(100));
 
         let mut fut = task::spawn(ctx.done);
         assert_pending!(fut.poll());
 
         // cancel
-        cancel_timeout.abort();
+        abort_timeout.abort();
         assert_ready!(fut.poll());
     }
 
@@ -154,9 +154,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_cancel_simple() {
-        let ctx0 = Context::new();
+        let ctx = Context::new();
 
-        let (ctx, abort_handle) = ctx0.with_cancel();
+        let (ctx, abort_handle) = ctx.with_cancel();
 
         let mut fut = task::spawn(ctx.done);
         assert_pending!(fut.poll());
