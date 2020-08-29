@@ -7,7 +7,11 @@ let
 
   project-overlay =
     self: super:
-      let
+    let
+        crate2nix = import (fetchTarball "https://github.com/kolloch/crate2nix/tarball/0.8.0") {};
+
+        grcov = self.callPackage ./grcov {};
+
         rustTools = self.rustChannelOf {
           rustToolchain = ../rust-toolchain;
         };
