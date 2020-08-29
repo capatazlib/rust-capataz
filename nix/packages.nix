@@ -1,9 +1,12 @@
+args @ { nightly ? false }:
+
 let
   sources =
     import ./sources.nix;
 
   mozilla-overlay =
     import sources.nixpkgs-mozilla;
+
 
   project-overlay =
     self: super:
@@ -17,7 +20,7 @@ let
         };
 
         # We want to get the rust package with all these utilities
-        mozilla-rust = rustTools.rust.override {
+        mozilla-rust-stable = rustTools.rust.override {
           extensions = [
             "rust-src"
             "rust-std"
@@ -26,6 +29,14 @@ let
             "clippy-preview"
           ];
         };
+
+        mozilla-rust-nightly = (self.rustChannelOf {
+          channel = "nightly";
+        }).rust;
+
+        mozilla-rust = if nightly
+                       then mozilla-rust-nightly
+                       else mozilla-rust-stable;
 
         # rust-src is a link tree, so we need to get the src attribute from one of
         # it's paths
@@ -47,21 +58,28 @@ let
         '';
       in
         {
-          rustTools = rustTools;
+          inherit grcov crate2nix rustTools mozilla-rust;
+
           rustPlatform = super.makeRustPlatform {
             cargo = mozilla-rust;
             rustc = (mozilla-rust // { src = rustSrc; });
           };
-          mozilla-rust = mozilla-rust;
+
+          # make sure carnix generated code uses the project's rust version
+          buildRustCrate = super.buildRustCrate.override {
+            cargo = mozilla-rust;
+            rust = mozilla-rust;
+            rustc = (mozilla-rust // { src = rustSrc; });
+          };
         };
 
   pinnedPkgs =
-    import sources.nixpkgs {
+    import sources.nixpkgs ({
       overlays = [
         mozilla-overlay
         project-overlay
       ];
-    };
+    } // (builtins.removeAttrs args ["nightly"]));
 
 in
   pinnedPkgs
