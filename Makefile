@@ -3,9 +3,6 @@ help:	## Display this message
 .PHONY: help
 .DEFAULT_GOAL := help
 
-coverage: ## Run converage
-	./script/run-coverage.sh
-
 test: ## Run tests
 	cargo test
 .PHONY: test
