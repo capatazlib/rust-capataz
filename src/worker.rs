@@ -9,6 +9,7 @@ use tokio::time;
 
 use crate::context::Context;
 
+// TODO: replace with OnceCell
 lazy_static! {
     static ref WORKER_START_TIMEOUT: Duration = Duration::from_secs(1);
 }
