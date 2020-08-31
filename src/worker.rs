@@ -33,8 +33,8 @@ pub enum Shutdown {
 }
 
 /// StartNotifier offers a convenient way to notify a worker spawner (a
-/// Supervisor in the general case) that the worker got started (or failed) to
-/// start.
+/// Supervisor in the general case) that the worker got started or that it
+/// failed to start.
 pub struct StartNotifier(Box<dyn FnOnce(Result<(), anyhow::Error>) + Send>);
 
 impl StartNotifier {
@@ -67,9 +67,9 @@ pub struct Spec {
         Box<dyn FnMut(Context, StartNotifier) -> BoxFuture<'static, Result<(), anyhow::Error>>>,
 }
 
-/// Worker represents an routine that got started from a worker::Spec.
-/// It contains metadata and also offers an API to provide graceful and
-/// forceful termination
+/// Worker represents a routine that got started from a `worker::Spec`. It
+/// contains metadata and also offers an API to perform graceful and forceful
+/// termination
 pub struct Worker {
     spec: Spec,
     runtime_name: String,
@@ -80,22 +80,24 @@ pub struct Worker {
 }
 
 impl Spec {
-    /// new creates a worker routine. It requires two arguments: a name that is
-    /// used for runtime tracing and a start function that returns a routine
-    /// that is going to be executed in a Future task concurrently.
+    /// new creates a worker routine spec. It requires two arguments, a name
+    /// that is used for runtime tracing and a start function that returns a
+    /// routine that is going to be executed in a Future task concurrently.
     ///
     /// ### The name argument
     ///
-    /// A name argument must not be empty nor contain forward slash characters
+    /// A name argument must not be empty nor contain forward slash characters.
+    /// It is used for runtime telemetry.
     ///
     /// ### The start function
     ///
-    /// This function is where your business logic should be located. it will be
+    /// This function is where your business logic should be located; it will be
     /// running on a new supervised routine.
     ///
     /// The start function will receive a Context record that **must** be used
     /// inside your business logic to accept stop signals from the supervisor
     /// that manages this routine life-cycle.
+    ///
     pub fn new<F, O>(name: &str, mut routine0: F) -> Self
     where
         F: FnMut(Context) -> O + 'static,
@@ -127,8 +129,7 @@ impl Spec {
     ///
     /// It is essential to call the API from the StartNotifier function in your
     /// business logic as soon as you consider the worker is initialized,
-    /// otherwise the parent supervisor will block and eventually fail with a
-    /// timeout.
+    /// otherwise the parent supervisor will fail fast.
     ///
     /// ### Report a start error with the StartNotifier
     ///
@@ -168,11 +169,15 @@ impl Spec {
         self
     }
 
+    /// start_timeout is a builder method that modifies the timeout for starting
+    /// a worker routine. Defaults to 1 second.
     pub fn start_timeout(mut self, timeout: Duration) -> Self {
         self.start_timeout = timeout;
         self
     }
 
+    /// termination_timeout is a builder method that modifies the timeout for
+    /// terminating a worker routine. Defaults to infinity.
     pub fn termination_timeout(mut self, dur: Duration) -> Self {
         self.termination_timeout = TerminationTimeout::Timeout(dur);
         self
