@@ -6,7 +6,7 @@ help:	## Display this message
 Cargo.nix: Cargo.toml
 	crate2nix generate -n ./nix/packages.nix
 
-test: ## Run tests
+test: Cargo.nix ## Run tests
 	cargo test
 .PHONY: test
 
