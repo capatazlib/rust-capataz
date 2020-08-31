@@ -145,7 +145,7 @@ impl Spec {
         self
     }
 
-    /// shutdown is a builder method that allows to modify the Restart settings
+    /// shutdown is a builder method that allows to modify the Shutdown settings
     /// for the spawned worker
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = shutdown;
