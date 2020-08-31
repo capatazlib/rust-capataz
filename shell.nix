@@ -1,4 +1,4 @@
-{pkgs ? import ./nix/packages.nix }:
+{pkgs ? import ./nix/packages.nix { nightly = false; }}:
 
 pkgs.mkShell {
   buildInputs = with pkgs; [
@@ -8,6 +8,8 @@ pkgs.mkShell {
     stdenv
 
     # rust related deps
+    crate2nix
+    grcov
     mozilla-rust
     rust-analyzer
   ];
