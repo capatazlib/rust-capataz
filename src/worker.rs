@@ -11,7 +11,12 @@ use crate::context::Context;
 
 lazy_static! {
     static ref WORKER_START_TIMEOUT: Duration = Duration::from_secs(1);
-    static ref WORKER_TERMINATION_TIMEOUT: Duration = Duration::from_secs(1);
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum TerminationTimeout {
+    Infinity,
+    Timeout(Duration),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -55,7 +60,7 @@ impl StartNotifier {
 pub struct Spec {
     name: String,
     start_timeout: Duration,
-    termination_timeout: Duration,
+    termination_timeout: TerminationTimeout,
     restart: Restart,
     shutdown: Shutdown,
     routine:
@@ -103,7 +108,7 @@ impl Spec {
         Spec {
             name: name.to_owned(),
             start_timeout: *WORKER_START_TIMEOUT,
-            termination_timeout: *WORKER_TERMINATION_TIMEOUT,
+            termination_timeout: TerminationTimeout::Infinity,
             shutdown: Shutdown::Indefinitely,
             restart: Restart::Permanent,
             routine: Box::new(routine1),
@@ -142,7 +147,7 @@ impl Spec {
         Spec {
             name: name.to_owned(),
             start_timeout: *WORKER_START_TIMEOUT,
-            termination_timeout: *WORKER_TERMINATION_TIMEOUT,
+            termination_timeout: TerminationTimeout::Infinity,
             shutdown: Shutdown::Indefinitely,
             restart: Restart::Permanent,
             routine: Box::new(routine1),
@@ -168,8 +173,8 @@ impl Spec {
         self
     }
 
-    pub fn termination_timeout(mut self, timeout: Duration) -> Self {
-        self.termination_timeout = timeout;
+    pub fn termination_timeout(mut self, dur: Duration) -> Self {
+        self.termination_timeout = TerminationTimeout::Timeout(dur);
         self
     }
 
@@ -238,7 +243,16 @@ impl Worker {
     pub async fn terminate(self) -> (Spec, Option<Arc<anyhow::Error>>) {
         self.termination_handle.abort();
 
-        let result = time::timeout(self.spec.termination_timeout, self.join_handle).await;
+        let result = match self.spec.termination_timeout {
+            TerminationTimeout::Infinity => {
+                let result = self.join_handle.await;
+                Ok(result)
+            }
+            TerminationTimeout::Timeout(ref termination_timeout) => {
+                time::timeout(*termination_timeout, self.join_handle).await
+            }
+        };
+
         match result {
             Err(termination_timeout_err) => {
                 self.kill_handle.abort();
