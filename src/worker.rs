@@ -9,6 +9,11 @@ use tokio::time;
 
 use crate::context::Context;
 
+lazy_static! {
+    static ref WORKER_START_TIMEOUT: Duration = Duration::from_secs(1);
+    static ref WORKER_TERMINATION_TIMEOUT: Duration = Duration::from_secs(1);
+}
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Restart {
     Permanent,
@@ -49,6 +54,8 @@ impl StartNotifier {
 
 pub struct Spec {
     name: String,
+    start_timeout: Duration,
+    termination_timeout: Duration,
     restart: Restart,
     shutdown: Shutdown,
     routine:
@@ -95,6 +102,8 @@ impl Spec {
         };
         Spec {
             name: name.to_owned(),
+            start_timeout: *WORKER_START_TIMEOUT,
+            termination_timeout: *WORKER_TERMINATION_TIMEOUT,
             shutdown: Shutdown::Indefinitely,
             restart: Restart::Permanent,
             routine: Box::new(routine1),
@@ -132,6 +141,8 @@ impl Spec {
         let routine1 = move |ctx: Context, on_start: StartNotifier| routine0(ctx, on_start).boxed();
         Spec {
             name: name.to_owned(),
+            start_timeout: *WORKER_START_TIMEOUT,
+            termination_timeout: *WORKER_TERMINATION_TIMEOUT,
             shutdown: Shutdown::Indefinitely,
             restart: Restart::Permanent,
             routine: Box::new(routine1),
@@ -149,6 +160,16 @@ impl Spec {
     /// for the spawned worker
     pub fn shutdown(mut self, shutdown: Shutdown) -> Self {
         self.shutdown = shutdown;
+        self
+    }
+
+    pub fn start_timeout(mut self, timeout: Duration) -> Self {
+        self.start_timeout = timeout;
+        self
+    }
+
+    pub fn termination_timeout(mut self, timeout: Duration) -> Self {
+        self.termination_timeout = timeout;
         self
     }
 
