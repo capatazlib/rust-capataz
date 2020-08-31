@@ -25,25 +25,25 @@ pub enum Shutdown {
 /// StartNotifier offers a convenient way to notify a worker spawner (a
 /// Supervisor in the general case) that the worker got started (or failed) to
 /// start.
-pub struct StartNotifier(Box<dyn FnOnce(Option<anyhow::Error>) + Send>);
+pub struct StartNotifier(Box<dyn FnOnce(Result<(), anyhow::Error>) + Send>);
 
 impl StartNotifier {
-    pub fn from_oneshot(sender: oneshot::Sender<Option<anyhow::Error>>) -> Self {
+    pub fn from_oneshot(sender: oneshot::Sender<Result<(), anyhow::Error>>) -> Self {
         StartNotifier(Box::new(move |err| {
             let _ = sender.send(err);
         }))
     }
 
-    fn call(self, err: Option<anyhow::Error>) {
+    fn call(self, err: Result<(), anyhow::Error>) {
         self.0(err)
     }
 
     pub fn success(self) {
-        self.call(None)
+        self.call(Ok(()))
     }
 
     pub fn failed(self, err: anyhow::Error) {
-        self.call(Some(err))
+        self.call(Err(err))
     }
 }
 
@@ -90,7 +90,7 @@ impl Spec {
         O: Future<Output = anyhow::Result<()>> + FutureExt + Send + Sized + 'static,
     {
         let routine1 = move |ctx: Context, on_start: StartNotifier| {
-            on_start.call(None);
+            on_start.success();
             routine0(ctx).boxed()
         };
         Spec {
@@ -172,7 +172,7 @@ impl Spec {
         let created_at = Utc::now();
 
         // ON_START setup
-        let (started_tx, started_rx) = oneshot::channel::<Option<anyhow::Error>>();
+        let (started_tx, started_rx) = oneshot::channel::<Result<(), anyhow::Error>>();
         let start_notifier = StartNotifier::from_oneshot(started_tx);
 
         // CANCEL setup
@@ -191,10 +191,10 @@ impl Spec {
             // On worker initialization failed, we need to signal
             // this to starter
             Err(err) => Err(anyhow::Error::new(err)),
-            Ok(Some(err)) => Err(err),
+            Ok(Err(err)) => Err(err),
 
             // Happy path
-            Ok(None) => Ok(Worker {
+            Ok(Ok(_)) => Ok(Worker {
                 spec: self,
                 runtime_name,
                 created_at,
