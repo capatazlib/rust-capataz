@@ -33,7 +33,7 @@ pub enum Shutdown {
 pub struct StartNotifier(Box<dyn FnOnce(Result<(), anyhow::Error>) + Send>);
 
 impl StartNotifier {
-    pub fn from_oneshot(sender: oneshot::Sender<Result<(), anyhow::Error>>) -> Self {
+    fn from_oneshot(sender: oneshot::Sender<Result<(), anyhow::Error>>) -> Self {
         StartNotifier(Box::new(move |err| {
             let _ = sender.send(err);
         }))
