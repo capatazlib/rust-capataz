@@ -241,7 +241,7 @@ impl Worker {
         let result = time::timeout(self.spec.termination_timeout, self.join_handle).await;
         match result {
             Err(termination_timeout_err) => {
-                self.termination_handle.abort();
+                self.kill_handle.abort();
                 (
                     self.spec,
                     Some(Arc::new(anyhow::Error::new(termination_timeout_err))),
