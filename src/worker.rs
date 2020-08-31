@@ -276,7 +276,7 @@ mod tests {
     fn start_err_worker(name: &str, err_msg: &'static str) -> worker::Spec {
         worker::Spec::new_with_start(name, move |_: Context, start: StartNotifier| async move {
             start.failed(anyhow::Error::msg(err_msg.to_owned()));
-            Ok(())
+            Err(anyhow::Error::msg("should not see this"))
         })
     }
 
