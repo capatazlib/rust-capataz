@@ -230,38 +230,40 @@ impl Spec {
 impl Worker {
     /// terminate tries to stop gracefuly a worker routine. In the scenario that
     /// the routine doesn't stop after a timeout, it is brutally killed.
-    pub async fn terminate(self) -> Result<Spec, Arc<anyhow::Error>> {
+    pub async fn terminate(self) -> (Spec, Option<Arc<anyhow::Error>>) {
         self.termination_handle.abort();
 
-        let mut delay = time::delay_for(Duration::from_millis(1000));
-        tokio::select! {
-           _ = &mut delay => {
-               self.termination_handle.abort();
-               return Ok(self.spec)
-           },
-           result = self.join_handle => {
-               match result {
-                   Ok(Ok(_)) => return Ok(self.spec),
-                   Ok(Err(_future_err)) => {
-                       // TODO:
-                       // * deal with termination error
-                       return Ok(self.spec);
-                   },
-                   Err(_abort_err) => {
-                       // TODO:
-                       // * deal with abort error
-                       return Ok(self.spec);
-                   },
-               }
-           }
+        let result = time::timeout(self.spec.termination_timeout, self.join_handle).await;
+        match result {
+            Err(termination_timeout_err) => {
+                self.termination_handle.abort();
+                (
+                    self.spec,
+                    Some(Arc::new(anyhow::Error::new(termination_timeout_err))),
+                )
+            }
+
+            // abort logic failed for some reason
+            Ok(Err(abort_err)) => (self.spec, Some(Arc::new(anyhow::Error::new(abort_err)))),
+
+            // worker routine returned with a failure, but because this is
+            // a termination, we return the error
+            Ok(Ok(Err(routine_err))) => {
+                (self.spec, Some(Arc::new(anyhow::Error::new(routine_err))))
+            }
+
+            // happy path
+            Ok(Ok(Ok(_))) => return (self.spec, None),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
 
     use tokio::sync::mpsc;
+    use tokio::time;
 
     use crate::context::*;
     use crate::worker::{self, StartNotifier};
@@ -297,8 +299,8 @@ mod tests {
         let worker = start_result.expect("successful worker creation");
 
         before_rx.recv().await;
-        let stop_result = worker.terminate().await;
-        let _ = stop_result.expect("successful worker termination");
+        let (_spec, stop_err) = worker.terminate().await;
+        assert!(stop_err.is_none());
         after_rx.recv().await;
     }
 
