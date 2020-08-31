@@ -386,6 +386,8 @@ mod tests {
 
         match result {
             Err(start_timeout_err) => {
+                // TODO: create well-defined capataz error that describes the error
+                // succintly
                 assert_eq!("deadline has elapsed", format!("{:?}", start_timeout_err))
             }
             Ok(_) => panic!("expecting error, got result"),
@@ -401,9 +403,16 @@ mod tests {
 
         match result {
             Err(start_not_called_err) => {
+                // TODO: create well-defined capataz error that describes the error
+                // succintly
                 assert_eq!("channel closed", format!("{:?}", start_not_called_err))
             }
             Ok(_) => panic!("expecting error, got result"),
         }
     }
+
+    // TODO: Termination tests
+    // * termination success
+    // * termination error
+    // * termination time out
 }
