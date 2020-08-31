@@ -206,16 +206,21 @@ impl Spec {
         let join_handle = task::spawn(routine);
 
         // ON_START blocking -- block before moving to the next start
-        let err = started_rx.await;
+        let err = time::timeout(self.start_timeout, started_rx).await;
 
         match err {
             // On worker initialization failed, we need to signal
             // this to starter
-            Err(err) => Err(anyhow::Error::new(err)),
-            Ok(Err(err)) => Err(err),
+            Err(start_timeout_err) => Err(anyhow::Error::new(start_timeout_err)),
+
+            Ok(Err(start_notify_not_invoked_err)) => {
+                Err(anyhow::Error::new(start_notify_not_invoked_err))
+            }
+
+            Ok(Ok(Err(routine_err))) => Err(routine_err),
 
             // Happy path
-            Ok(Ok(_)) => Ok(Worker {
+            Ok(Ok(Ok(_))) => Ok(Worker {
                 spec: self,
                 runtime_name,
                 created_at,
@@ -272,6 +277,27 @@ mod tests {
         worker::Spec::new_with_start(name, move |_: Context, start: StartNotifier| async move {
             start.failed(anyhow::Error::msg(err_msg.to_owned()));
             Ok(())
+        })
+    }
+
+    fn start_timeout_worker(name: &str, start_timeout: Duration, delay: Duration) -> worker::Spec {
+        let spec = worker::Spec::new_with_start(
+            name,
+            move |_: Context, start: StartNotifier| async move {
+                // we want to advance time so that timeout on the caller side expires
+                time::delay_for(delay).await;
+                start.success();
+                Err(anyhow::Error::msg("should not see this"))
+            },
+        );
+        spec.start_timeout(start_timeout)
+    }
+
+    fn no_start_worker(name: &str) -> worker::Spec {
+        worker::Spec::new_with_start(name, move |ctx: Context, _: StartNotifier| async move {
+            // we want to advance time so that timeout on the caller side expires
+            ctx.done.await;
+            Err(anyhow::Error::msg("should not see this"))
         })
     }
 
@@ -337,6 +363,46 @@ mod tests {
         let result = spec.start(&ctx, "root").await;
         match result {
             Err(start_err1) => assert_eq!("boom", format!("{:?}", start_err1)),
+            Ok(_) => panic!("expecting error, got result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_start_timeout_failure() {
+        time::pause();
+
+        let spec = start_timeout_worker(
+            "child1",
+            Duration::from_secs(1), // timeout
+            Duration::from_secs(3), // delay
+        );
+
+        let ctx = Context::new();
+        let worker_fut = spec.start(&ctx, "root");
+
+        time::advance(Duration::from_secs(4)).await;
+
+        let result = worker_fut.await;
+
+        match result {
+            Err(start_timeout_err) => {
+                assert_eq!("deadline has elapsed", format!("{:?}", start_timeout_err))
+            }
+            Ok(_) => panic!("expecting error, got result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_start_not_invoked() {
+        let spec = no_start_worker("child1");
+
+        let ctx = Context::new();
+        let result = spec.start(&ctx, "root").await;
+
+        match result {
+            Err(start_not_called_err) => {
+                assert_eq!("channel closed", format!("{:?}", start_not_called_err))
+            }
             Ok(_) => panic!("expecting error, got result"),
         }
     }
