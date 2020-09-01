@@ -4,7 +4,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures::future::{AbortHandle, Abortable, Aborted, BoxFuture, Future, FutureExt};
 use tokio::sync::oneshot;
-use tokio::task::{self, JoinHandle};
+use tokio::task::{self, JoinError, JoinHandle};
 use tokio::time;
 
 use crate::context::Context;
@@ -32,6 +32,30 @@ pub enum Shutdown {
     Indefinitely,
     Timeout(Duration),
 }
+
+#[derive(Debug)]
+pub enum TerminationError {
+    TimeoutError(time::Elapsed),
+    CancelError(JoinError),
+    PanicError(JoinError),
+    KillError(Aborted),
+    ClientError(anyhow::Error),
+}
+
+impl std::fmt::Display for TerminationError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use TerminationError::*;
+        match self {
+            TimeoutError(_) => write!(fmt, "worker routine termination timeout"),
+            CancelError(_) => write!(fmt, "worker routine canceled"),
+            PanicError(_) => write!(fmt, "worker routine terminated by panic"),
+            KillError(_) => write!(fmt, "worker routine terminated by hard kill"),
+            ClientError(_) => write!(fmt, "worker routine finished with error"),
+        }
+    }
+}
+
+impl std::error::Error for TerminationError {}
 
 /// StartNotifier offers a convenient way to notify a worker spawner (a
 /// Supervisor in the general case) that the worker got started or that it
@@ -246,7 +270,7 @@ impl Spec {
 impl Worker {
     /// terminate tries to stop gracefuly a worker routine. In the scenario that
     /// the routine doesn't stop after a timeout, it is brutally killed.
-    pub async fn terminate(self) -> (Spec, Option<Arc<anyhow::Error>>) {
+    pub async fn terminate(self) -> (Spec, Option<Arc<TerminationError>>) {
         self.termination_handle.abort();
 
         let result = match self.spec.termination_timeout {
@@ -264,18 +288,36 @@ impl Worker {
                 self.kill_handle.abort();
                 (
                     self.spec,
-                    Some(Arc::new(anyhow::Error::new(termination_timeout_err))),
+                    Some(Arc::new(TerminationError::TimeoutError(
+                        termination_timeout_err,
+                    ))),
                 )
             }
 
-            Ok(Err(join_handle_err)) => (
+            //
+            Ok(Err(join_handle_err)) => {
+                if join_handle_err.is_panic() {
+                    (
+                        self.spec,
+                        Some(Arc::new(TerminationError::PanicError(join_handle_err))),
+                    )
+                } else {
+                    (
+                        self.spec,
+                        Some(Arc::new(TerminationError::CancelError(join_handle_err))),
+                    )
+                }
+            }
+
+            Ok(Ok(Err(kill_err))) => (
                 self.spec,
-                Some(Arc::new(anyhow::Error::new(join_handle_err))),
+                Some(Arc::new(TerminationError::KillError(kill_err))),
             ),
 
-            Ok(Ok(Err(kill_err))) => (self.spec, Some(Arc::new(anyhow::Error::new(kill_err)))),
-
-            Ok(Ok(Ok(Err(termination_err)))) => (self.spec, Some(Arc::new(termination_err))),
+            Ok(Ok(Ok(Err(termination_err)))) => (
+                self.spec,
+                Some(Arc::new(TerminationError::ClientError(termination_err))),
+            ),
 
             // happy path
             Ok(Ok(Ok(Ok(_)))) => (self.spec, None),
@@ -487,7 +529,7 @@ mod tests {
 
         assert!(result.is_some());
         assert_eq!(
-            "termination_failed_worker",
+            "ClientError(termination_failed_worker)",
             format!("{:?}", result.unwrap())
         );
     }
@@ -519,7 +561,7 @@ mod tests {
                 // TODO: create well-defined capataz error that describes the error
                 // succintly
                 assert_eq!(
-                    "deadline has elapsed",
+                    "TimeoutError(Elapsed(()))",
                     format!("{:?}", termination_timeout_err)
                 );
                 // NOTE: not sure how to validate the abort logic got executed,
