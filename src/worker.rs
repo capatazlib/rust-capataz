@@ -268,17 +268,17 @@ impl Worker {
                 )
             }
 
-            // abort logic failed for some reason
-            Ok(Err(abort_err)) => (self.spec, Some(Arc::new(anyhow::Error::new(abort_err)))),
+            Ok(Err(join_handle_err)) => (
+                self.spec,
+                Some(Arc::new(anyhow::Error::new(join_handle_err))),
+            ),
 
-            // worker routine returned with a failure, but because this is
-            // a termination, we return the error
-            Ok(Ok(Err(routine_err))) => {
-                (self.spec, Some(Arc::new(anyhow::Error::new(routine_err))))
-            }
+            Ok(Ok(Err(kill_err))) => (self.spec, Some(Arc::new(anyhow::Error::new(kill_err)))),
+
+            Ok(Ok(Ok(Err(termination_err)))) => (self.spec, Some(Arc::new(termination_err))),
 
             // happy path
-            Ok(Ok(Ok(_))) => return (self.spec, None),
+            Ok(Ok(Ok(Ok(_)))) => (self.spec, None),
         }
     }
 }
@@ -319,6 +319,33 @@ mod tests {
             ctx.done.await;
             Err(anyhow::Error::msg("should not see this"))
         })
+    }
+
+    fn termination_success_worker(name: &str) -> worker::Spec {
+        worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            Ok(())
+        })
+    }
+
+    fn termination_failed_worker(name: &str) -> worker::Spec {
+        worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            Err(anyhow::Error::msg("termination_failed_worker"))
+        })
+    }
+
+    fn termination_timeout_worker(
+        name: &str,
+        termination_timeout: Duration,
+        delay: Duration,
+    ) -> worker::Spec {
+        let spec = worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            time::delay_for(delay).await;
+            Err(anyhow::Error::msg("termination_timeout_worker"))
+        });
+        spec.termination_timeout(termination_timeout)
     }
 
     #[tokio::test]
@@ -431,8 +458,72 @@ mod tests {
         }
     }
 
-    // TODO: Termination tests
-    // * termination success
-    // * termination error
-    // * termination time out
+    #[tokio::test]
+    async fn test_worker_termination_success() {
+        let spec = termination_success_worker("child1");
+
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .expect("worker should be returned");
+
+        let (_, result) = worker.terminate().await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_worker_termination_failure() {
+        let spec = termination_failed_worker("child1");
+
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .expect("worker should be returned");
+
+        let (_, result) = worker.terminate().await;
+
+        assert!(result.is_some());
+        assert_eq!(
+            "termination_failed_worker",
+            format!("{:?}", result.unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_worker_termination_timeout_failure() {
+        time::pause();
+
+        let spec = termination_timeout_worker(
+            "child1",
+            Duration::from_secs(1), // timeout
+            Duration::from_secs(3), // delay
+        );
+
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .expect("should return worker");
+
+        let termination_fut = worker.terminate();
+
+        time::advance(Duration::from_secs(4)).await;
+
+        let (_, result) = termination_fut.await;
+
+        match result {
+            Some(termination_timeout_err) => {
+                // TODO: create well-defined capataz error that describes the error
+                // succintly
+                assert_eq!(
+                    "deadline has elapsed",
+                    format!("{:?}", termination_timeout_err)
+                );
+            }
+            None => panic!("expecting error, got none"),
+        }
+    }
 }
