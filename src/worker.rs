@@ -522,6 +522,9 @@ mod tests {
                     "deadline has elapsed",
                     format!("{:?}", termination_timeout_err)
                 );
+                // NOTE: not sure how to validate the abort logic got executed,
+                // and what the side-effects of those are. @RadicalZephyr, if
+                // you have any ideas, I'm all ears.
             }
             None => panic!("expecting error, got none"),
         }
