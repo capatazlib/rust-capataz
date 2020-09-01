@@ -390,6 +390,16 @@ mod tests {
         spec.termination_timeout(termination_timeout)
     }
 
+    fn panic_worker(name: &str, panic_msg0: &str) -> worker::Spec {
+        let panic_msg1 = panic_msg0.to_owned();
+        worker::Spec::new(name, move |_: Context| {
+            let panic_msg = panic_msg1.clone();
+            async move {
+                panic!(panic_msg);
+            }
+        })
+    }
+
     #[tokio::test]
     async fn test_worker_simple_start() {
         let (before_tx, mut before_rx) = mpsc::channel(1);
@@ -497,6 +507,27 @@ mod tests {
                 assert_eq!("channel closed", format!("{:?}", start_not_called_err))
             }
             Ok(_) => panic!("expecting error, got result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_termination_with_panic() {
+        let spec = panic_worker("child1", "panic boom");
+        let ctx = Context::new();
+        let worker = spec.start(&ctx, "root").await.expect("should match worker");
+
+        let (_, result) = worker.terminate().await;
+
+        match result {
+            Some(panic_err) => {
+                // TODO: create well-defined capataz error that describes the error
+                // succintly
+                assert_eq!(
+                    "PanicError(JoinError::Panic(...))",
+                    format!("{:?}", panic_err)
+                )
+            }
+            None => panic!("expecting error, got result"),
         }
     }
 
