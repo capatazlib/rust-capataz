@@ -516,6 +516,9 @@ mod tests {
         let ctx = Context::new();
         let worker = spec.start(&ctx, "root").await.expect("should match worker");
 
+        // QUESTION/TODO: I've some doubts here, what would happen if a future
+        // panics and we don't do an await on it? How can we verify worker futures
+        // are running with no panics without calling .await on them?
         let (_, result) = worker.terminate().await;
 
         match result {
