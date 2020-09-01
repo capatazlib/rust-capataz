@@ -135,6 +135,10 @@ rec {
             packageId = "futures";
           }
           {
+            name = "lazy_static";
+            packageId = "lazy_static";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "rt-core" "sync" "macros" "time" ];
@@ -521,6 +525,18 @@ rec {
           "write-all-vectored" = [ "io" ];
         };
         resolvedDefaultFeatures = [ "alloc" "async-await" "async-await-macro" "channel" "futures-channel" "futures-io" "futures-macro" "futures-sink" "io" "memchr" "proc-macro-hack" "proc-macro-nested" "sink" "slab" "std" ];
+      };
+      "lazy_static" = rec {
+        crateName = "lazy_static";
+        version = "1.4.0";
+        edition = "2015";
+        sha256 = "0in6ikhw8mgl33wjv6q6xfrb5b9jr16q8ygjy803fay4zcisvaz2";
+        authors = [
+          "Marvin Löbel <loebel.marvin@gmail.com>"
+        ];
+        features = {
+          "spin_no_std" = [ "spin" ];
+        };
       };
       "libc" = rec {
         crateName = "libc";

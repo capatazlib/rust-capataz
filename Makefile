@@ -3,7 +3,10 @@ help:	## Display this message
 .PHONY: help
 .DEFAULT_GOAL := help
 
-test: ## Run tests
+Cargo.nix: Cargo.toml
+	crate2nix generate -n ./nix/packages.nix
+
+test: Cargo.nix ## Run tests
 	cargo test
 .PHONY: test
 

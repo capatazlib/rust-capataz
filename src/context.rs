@@ -3,29 +3,39 @@ pub use futures::future::AbortHandle;
 use futures::future::{pending, BoxFuture, FutureExt, Shared};
 use tokio::time::Duration;
 
+/// Context offers a well defined API to create futures that are intended to be
+/// used for routine life-cycle only.
 #[derive(Clone, Debug)]
 pub struct Context {
     pub done: Shared<BoxFuture<'static, ()>>,
 }
 
 impl Context {
+    /// new creates a Contex that contains a future that will always block
+    /// when waiting on it
     pub fn new() -> Self {
         Self {
             done: pending().boxed().shared(),
         }
     }
 
+    /// with_cancel returns a new context with an AbortHandle, if the
+    /// `AbortHandle#abort` method gets invoked, the returned `Context.done`
+    /// future will return a value.
     pub fn with_cancel(&self) -> (Self, AbortHandle) {
         let (done, aborter) = futures::future::abortable(self.done.clone());
         let done = done.map(|_| ()).boxed().shared();
         (Self { done }, aborter)
     }
 
+    /// with_timeout returns a new context with an AbortHandle (same as
+    /// with_cancel). After an specified amount of time, the returned `Context.done`
+    /// future will return a value.
     pub fn with_timeout(&self, timeout: Duration) -> (Self, AbortHandle) {
         let done = tokio::time::timeout(timeout, self.done.clone());
         let (done, aborter) = futures::future::abortable(done);
         let done = done.map(|_| ()).boxed().shared();
-        (Self { done }, aborter )
+        (Self { done }, aborter)
     }
 }
 
