@@ -223,6 +223,7 @@ impl Spec {
         mut self,
         parent_ctx: &Context,
         parent_name: &str,
+        // TODO: pending parent channel to notify errors that happened
     ) -> anyhow::Result<Worker> {
         let runtime_name = format!("{}/{}", parent_name, self.name);
         let created_at = Utc::now();
@@ -237,6 +238,10 @@ impl Spec {
         let future = (*self.routine)(ctx, start_notifier);
         let routine = Abortable::new(future, kill_registration);
 
+        // TODO: decorate routine to wait for client routine result, and
+
+        // if it is an error, send the error to the supervisor through
+        // the given channel
         // SPAWN -- actually spawn concurrent worker future
         let join_handle = task::spawn(routine);
 
@@ -516,9 +521,6 @@ mod tests {
         let ctx = Context::new();
         let worker = spec.start(&ctx, "root").await.expect("should match worker");
 
-        // QUESTION/TODO: I've some doubts here, what would happen if a future
-        // panics and we don't do an await on it? How can we verify worker futures
-        // are running with no panics without calling .await on them?
         let (_, result) = worker.terminate().await;
 
         match result {
