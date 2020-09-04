@@ -139,6 +139,10 @@ rec {
             packageId = "lazy_static";
           }
           {
+            name = "thiserror";
+            packageId = "thiserror";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "rt-core" "sync" "macros" "time" ];
@@ -793,6 +797,47 @@ rec {
           "test" = [ "syn-test-suite/all-features" ];
         };
         resolvedDefaultFeatures = [ "clone-impls" "default" "derive" "full" "parsing" "printing" "proc-macro" "quote" "visit-mut" ];
+      };
+      "thiserror" = rec {
+        crateName = "thiserror";
+        version = "1.0.20";
+        edition = "2018";
+        sha256 = "020d7pfq7vg2iw1bbilnyq764zy35ncg2syn9a7vgk6qriqd1zbx";
+        authors = [
+          "David Tolnay <dtolnay@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "thiserror-impl";
+            packageId = "thiserror-impl";
+          }
+        ];
+        
+      };
+      "thiserror-impl" = rec {
+        crateName = "thiserror-impl";
+        version = "1.0.20";
+        edition = "2018";
+        sha256 = "14qphjwa68sfjk3404iwv6hh8kvk6vmcwan9589sqqrhyw9gr05x";
+        procMacro = true;
+        authors = [
+          "David Tolnay <dtolnay@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn";
+          }
+        ];
+        
       };
       "time" = rec {
         crateName = "time";

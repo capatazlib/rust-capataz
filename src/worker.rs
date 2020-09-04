@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use futures::future::{AbortHandle, Abortable, Aborted, BoxFuture, Future, FutureExt};
+use futures::future::{abortable, AbortHandle, Aborted, BoxFuture, Future, FutureExt};
+use thiserror::Error;
 use tokio::sync::oneshot;
-use tokio::task::{self, JoinHandle};
+use tokio::task::{self, JoinError, JoinHandle};
 use tokio::time;
 
 use crate::context::Context;
@@ -33,19 +33,114 @@ pub enum Shutdown {
     Timeout(Duration),
 }
 
+#[derive(Error, Debug)]
+pub enum TerminationError {
+    #[error("worker routine termination timeout")]
+    TimeoutError {
+        #[from]
+        source: time::Elapsed,
+    },
+    #[error("worker routine termination canceled or paniced")]
+    JoinHandleError {
+        #[from]
+        source: JoinError,
+    },
+    #[error("worker routine terminated by hard kill")]
+    KillError {
+        #[from]
+        source: Aborted,
+    },
+    #[error(transparent)]
+    WorkerError {
+        #[from]
+        source: anyhow::Error,
+    },
+}
+
+impl TerminationError {
+    fn is_timeout_error(&self) -> bool {
+        match self {
+            TerminationError::TimeoutError { .. } => true,
+            _ => false,
+        }
+    }
+    fn is_join_handle_error(&self) -> bool {
+        match self {
+            TerminationError::JoinHandleError { .. } => true,
+            _ => false,
+        }
+    }
+
+    // TODO: need to find a decent way to setup an error scenario
+    // where this verification method is called
+    // fn is_kill_error(&self) -> bool {
+    //     match self {
+    //         TerminationError::KillError { .. } => true,
+    //         _ => false,
+    //     }
+    // }
+
+    pub fn is_worker_termination_error(&self) -> bool {
+        match self {
+            TerminationError::WorkerError { .. } => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum StartError {
+    #[error("worker routine start timeout")]
+    TimeoutError {
+        #[from]
+        source: time::Elapsed,
+    },
+    #[error("worker routine did not notify start")]
+    NotifyStartError {
+        #[from]
+        source: oneshot::error::RecvError,
+    },
+    #[error(transparent)]
+    InitError {
+        #[from]
+        source: anyhow::Error,
+    },
+}
+
+impl StartError {
+    fn is_timeout_error(&self) -> bool {
+        match self {
+            StartError::TimeoutError { .. } => true,
+            _ => false,
+        }
+    }
+    fn is_notify_start_error(&self) -> bool {
+        match self {
+            StartError::NotifyStartError { .. } => true,
+            _ => false,
+        }
+    }
+    pub fn is_worker_init_error(&self) -> bool {
+        match self {
+            StartError::InitError { .. } => true,
+            _ => false,
+        }
+    }
+}
+
 /// StartNotifier offers a convenient way to notify a worker spawner (a
 /// Supervisor in the general case) that the worker got started or that it
 /// failed to start.
-pub struct StartNotifier(Box<dyn FnOnce(Result<(), anyhow::Error>) + Send>);
+pub struct StartNotifier(Box<dyn FnOnce(Result<(), StartError>) + Send>);
 
 impl StartNotifier {
-    fn from_oneshot(sender: oneshot::Sender<Result<(), anyhow::Error>>) -> Self {
+    fn from_oneshot(sender: oneshot::Sender<Result<(), StartError>>) -> Self {
         StartNotifier(Box::new(move |err| {
             let _ = sender.send(err);
         }))
     }
 
-    fn call(self, err: Result<(), anyhow::Error>) {
+    fn call(self, err: Result<(), StartError>) {
         self.0(err)
     }
 
@@ -54,7 +149,7 @@ impl StartNotifier {
     }
 
     pub fn failed(self, err: anyhow::Error) {
-        self.call(Err(err))
+        self.call(Err(StartError::InitError { source: err }))
     }
 }
 
@@ -199,38 +294,60 @@ impl Spec {
         mut self,
         parent_ctx: &Context,
         parent_name: &str,
-    ) -> anyhow::Result<Worker> {
+        // TODO: pending parent channel to notify errors that happened
+    ) -> Result<Worker, (Self, StartError)> {
         let runtime_name = format!("{}/{}", parent_name, self.name);
         let created_at = Utc::now();
 
         // ON_START setup
-        let (started_tx, started_rx) = oneshot::channel::<Result<(), anyhow::Error>>();
+        //
+        // START WRAPPER (A)
+        // StartNotifier wraps the original worker routine, of type Result<(), StartError>
+        // with a Result<ORIGINAL, RecvError>
+        let (started_tx, started_rx) = oneshot::channel::<Result<(), StartError>>();
         let start_notifier = StartNotifier::from_oneshot(started_tx);
 
         // CANCEL setup
         let (ctx, termination_handle) = Context::with_cancel(parent_ctx);
-        let (kill_handle, kill_registration) = AbortHandle::new_pair();
-        let future = (*self.routine)(ctx, start_notifier);
-        let routine = Abortable::new(future, kill_registration);
+        let worker_routine0 = (*self.routine)(ctx, start_notifier);
+
+        // KILL setup
+        //
+        // TERMINATION WRAPPER (A)
+        // abortable wraps the original worker routine, of type Result<(), anyhow::Error>
+        // with a Result<ORIGINAL, Aborted>
+        let (worker_routine1, kill_handle) = abortable(worker_routine0);
+
+        // TODO: OBSERVE setup -- decorate routine to wait for client routine
+        // result, and if it is an error, send the error to the supervisor
+        // through the given channel
 
         // SPAWN -- actually spawn concurrent worker future
-        let join_handle = task::spawn(routine);
+        //
+        // TERMINATION WRAPPER (B)
+        // spawn wraps the original worker routine with a Result<ORIGINAL, JoinError>
+        let join_handle = task::spawn(worker_routine1);
 
         // ON_START blocking -- block before moving to the next start
-        let err = time::timeout(self.start_timeout, started_rx).await;
+        //
+        // START WRAPPER (B)
+        // timeout wraps the already decorated worker routine with a Result<WRAPPER (A), Timeout::Delay>
+        let result = time::timeout(
+            self.start_timeout,
+            started_rx, // START WRAPER (A)
+        )
+        .await;
 
-        match err {
-            // On worker initialization failed, we need to signal
-            // this to starter
-            Err(start_timeout_err) => Err(anyhow::Error::new(start_timeout_err)),
-
-            Ok(Err(start_notify_not_invoked_err)) => {
-                Err(anyhow::Error::new(start_notify_not_invoked_err))
-            }
-
-            Ok(Ok(Err(routine_err))) => Err(routine_err),
-
-            // Happy path
+        // The following match is nasty, but is inherent to the way we are decorating
+        // the original routine future provided by the API client.
+        match result {
+            // START WRAPER (B)
+            Err(start_timeout_err) => Err((self, From::from(start_timeout_err))),
+            // START WRAPER (A)
+            Ok(Err(start_sender_err)) => Err((self, From::from(start_sender_err))),
+            // ORIGINAL Init ERROR
+            Ok(Ok(Err(worker_init_err))) => Err((self, From::from(worker_init_err))),
+            // No Error registered, returning Worker
             Ok(Ok(Ok(_))) => Ok(Worker {
                 spec: self,
                 runtime_name,
@@ -246,11 +363,21 @@ impl Spec {
 impl Worker {
     /// terminate tries to stop gracefuly a worker routine. In the scenario that
     /// the routine doesn't stop after a timeout, it is brutally killed.
-    pub async fn terminate(self) -> (Spec, Option<Arc<anyhow::Error>>) {
+    pub async fn terminate(self) -> Result<Spec, (Spec, TerminationError)> {
+        // SIGNAL WORKER TERMINATION -- this call will cause the ctx.done future on the worker's
+        // select! call to signal a finish for cleanup
         self.termination_handle.abort();
 
+        // TERMINATION TIMEOUT --- we check the worker spec for a termination
+        // timeout, if there is one we do the waiting
+        //
+        // TERMINATION WRAPPER (C)
+        // timeout wraps the already decorated worker routine with a Result<WRAPPER (A), Timeout::Delay>
         let result = match self.spec.termination_timeout {
             TerminationTimeout::Infinity => {
+                // Given that the timeout wraps the result with Result<_, Timeout::Delay>,
+                // we need to wrap the original value with Ok so that the `match` brackets have
+                // the same type
                 let result = self.join_handle.await;
                 Ok(result)
             }
@@ -260,25 +387,19 @@ impl Worker {
         };
 
         match result {
+            // TERMINATION WRAPPER (C)
             Err(termination_timeout_err) => {
                 self.kill_handle.abort();
-                (
-                    self.spec,
-                    Some(Arc::new(anyhow::Error::new(termination_timeout_err))),
-                )
+                Err((self.spec, From::from(termination_timeout_err)))
             }
-
-            // abort logic failed for some reason
-            Ok(Err(abort_err)) => (self.spec, Some(Arc::new(anyhow::Error::new(abort_err)))),
-
-            // worker routine returned with a failure, but because this is
-            // a termination, we return the error
-            Ok(Ok(Err(routine_err))) => {
-                (self.spec, Some(Arc::new(anyhow::Error::new(routine_err))))
-            }
-
-            // happy path
-            Ok(Ok(Ok(_))) => return (self.spec, None),
+            // TERMINATION WRAPPER (B)
+            Ok(Err(join_handle_err)) => Err((self.spec, From::from(join_handle_err))),
+            // TERMINATION WRAPPER (A)
+            Ok(Ok(Err(kill_err))) => Err((self.spec, From::from(kill_err))),
+            // ORIGINAL ERROR (worker routine failed)
+            Ok(Ok(Ok(Err(worker_err)))) => Err((self.spec, From::from(worker_err))),
+            // Worker terminated without any hiccup
+            Ok(Ok(Ok(Ok(_)))) => Ok(self.spec),
         }
     }
 }
@@ -321,6 +442,43 @@ mod tests {
         })
     }
 
+    fn termination_success_worker(name: &str) -> worker::Spec {
+        worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            Ok(())
+        })
+    }
+
+    fn termination_failed_worker(name: &str) -> worker::Spec {
+        worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            Err(anyhow::Error::msg("termination_failed_worker"))
+        })
+    }
+
+    fn termination_timeout_worker(
+        name: &str,
+        termination_timeout: Duration,
+        delay: Duration,
+    ) -> worker::Spec {
+        let spec = worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            time::delay_for(delay).await;
+            Err(anyhow::Error::msg("termination_timeout_worker"))
+        });
+        spec.termination_timeout(termination_timeout)
+    }
+
+    fn panic_worker(name: &str, panic_msg0: &str) -> worker::Spec {
+        let panic_msg1 = panic_msg0.to_owned();
+        worker::Spec::new(name, move |_: Context| {
+            let panic_msg = panic_msg1.clone();
+            async move {
+                panic!(panic_msg);
+            }
+        })
+    }
+
     #[tokio::test]
     async fn test_worker_simple_start() {
         let (before_tx, mut before_rx) = mpsc::channel(1);
@@ -341,12 +499,15 @@ mod tests {
         let spec = worker::Spec::new("child1", routine);
 
         let ctx = Context::new();
-        let start_result = spec.start(&ctx, "root").await;
+        let start_result = spec.start(&ctx, "root").await.map_err(|err| err.1);
         let worker = start_result.expect("successful worker creation");
 
         before_rx.recv().await;
-        let (_spec, stop_err) = worker.terminate().await;
-        assert!(stop_err.is_none());
+        worker
+            .terminate()
+            .await
+            .map_err(|err| err.1)
+            .expect("worker termination must succeed");
         after_rx.recv().await;
     }
 
@@ -368,7 +529,7 @@ mod tests {
         let spec = worker::Spec::new_with_start("child1", routine);
 
         let ctx = Context::new();
-        let result = spec.start(&ctx, "root").await;
+        let result = spec.start(&ctx, "root").await.map_err(|err| err.1);
         let worker = result.expect("expecting successful worker creation");
 
         let _ = worker.terminate().await;
@@ -380,11 +541,13 @@ mod tests {
         let spec = start_err_worker("child1", "boom");
 
         let ctx = Context::new();
-        let result = spec.start(&ctx, "root").await;
-        match result {
-            Err(start_err1) => assert_eq!("boom", format!("{:?}", start_err1)),
-            Ok(_) => panic!("expecting error, got result"),
-        }
+        let start_err = spec
+            .start(&ctx, "root")
+            .await
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("worker start must fail");
+        assert!(start_err.is_worker_init_error());
     }
 
     #[tokio::test]
@@ -402,16 +565,13 @@ mod tests {
 
         time::advance(Duration::from_secs(4)).await;
 
-        let result = worker_fut.await;
+        let err = worker_fut
+            .await
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("worker start must fail");
 
-        match result {
-            Err(start_timeout_err) => {
-                // TODO: create well-defined capataz error that describes the error
-                // succintly
-                assert_eq!("deadline has elapsed", format!("{:?}", start_timeout_err))
-            }
-            Ok(_) => panic!("expecting error, got result"),
-        }
+        assert!(err.is_timeout_error());
     }
 
     #[tokio::test]
@@ -419,20 +579,97 @@ mod tests {
         let spec = no_start_worker("child1");
 
         let ctx = Context::new();
-        let result = spec.start(&ctx, "root").await;
-
-        match result {
-            Err(start_not_called_err) => {
-                // TODO: create well-defined capataz error that describes the error
-                // succintly
-                assert_eq!("channel closed", format!("{:?}", start_not_called_err))
-            }
-            Ok(_) => panic!("expecting error, got result"),
-        }
+        let err = spec
+            .start(&ctx, "root")
+            .await
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("worker start must fail");
+        assert!(err.is_notify_start_error());
     }
 
-    // TODO: Termination tests
-    // * termination success
-    // * termination error
-    // * termination time out
+    #[tokio::test]
+    async fn test_worker_termination_with_panic() {
+        let spec = panic_worker("child1", "panic boom");
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .map_err(|err| err.1)
+            .expect("worker start must succeed");
+        let err = worker
+            .terminate()
+            .await
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("worker termination must fail");
+        assert!(err.is_join_handle_error())
+    }
+
+    #[tokio::test]
+    async fn test_worker_termination_success() {
+        let spec = termination_success_worker("child1");
+
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .map_err(|err| err.1)
+            .expect("worker must be spawned");
+
+        worker
+            .terminate()
+            .await
+            .map_err(|err| err.1)
+            .expect("worker must terminate");
+    }
+
+    #[tokio::test]
+    async fn test_worker_termination_failure() {
+        let spec = termination_failed_worker("child1");
+
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .map_err(|err| err.1)
+            .expect("worker start must succeed");
+
+        let err = worker
+            .terminate()
+            .await
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("worker termination must fail");
+        assert!(err.is_worker_termination_error());
+    }
+
+    #[tokio::test]
+    async fn test_worker_termination_timeout_failure() {
+        time::pause();
+
+        let spec = termination_timeout_worker(
+            "child1",
+            Duration::from_secs(1), // timeout
+            Duration::from_secs(3), // delay
+        );
+
+        let ctx = Context::new();
+        let worker = spec
+            .start(&ctx, "root")
+            .await
+            .map_err(|err| err.1)
+            .expect("worker start must succeed");
+
+        let termination_fut = worker.terminate();
+
+        time::advance(Duration::from_secs(4)).await;
+
+        let err = termination_fut
+            .await
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("worker termination must fail");
+        assert!(err.is_timeout_error());
+    }
 }
