@@ -167,7 +167,7 @@ impl EventBufferCollector {
         }
     }
 
-    /// get_events returned the number of events that have happened so far
+    /// get_events returns the events that have happened so far
     pub async fn get_events(&self) -> Vec<Event> {
         let events = self.events.lock().await;
         (*events).clone()
