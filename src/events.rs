@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use crate::worker;
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::{mpsc, Mutex, MutexGuard};
+use tokio::sync::mpsc;
 use tokio::task::{self, JoinHandle};
+
+use crate::worker;
 
 /// Event represents all the different events that may happen on a running
 /// supervision tree.
