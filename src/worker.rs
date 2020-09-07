@@ -154,7 +154,8 @@ impl StartNotifier {
 }
 
 pub struct Spec {
-    name: String,
+    pub name: String,
+
     start_timeout: Duration,
     termination_timeout: TerminationTimeout,
     restart: Restart,
@@ -167,8 +168,9 @@ pub struct Spec {
 /// contains metadata and also offers an API to perform graceful and forceful
 /// termination
 pub struct Worker {
+    pub runtime_name: String,
+
     spec: Spec,
-    runtime_name: String,
     created_at: DateTime<Utc>,
     join_handle: JoinHandle<Result<anyhow::Result<()>, Aborted>>,
     termination_handle: AbortHandle,
@@ -405,7 +407,7 @@ impl Worker {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::time::Duration;
 
     use tokio::sync::mpsc;
@@ -413,6 +415,13 @@ mod tests {
 
     use crate::context::*;
     use crate::worker::{self, StartNotifier};
+
+    pub fn wait_done_worker(name: &str) -> worker::Spec {
+        worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            Ok(())
+        })
+    }
 
     fn start_err_worker(name: &str, err_msg: &'static str) -> worker::Spec {
         worker::Spec::new_with_start(name, move |_: Context, start: StartNotifier| async move {
