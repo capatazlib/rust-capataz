@@ -294,7 +294,7 @@ async fn run_event_collector(events: Arc<Mutex<Vec<Event>>>, mut receiver: mpsc:
 
 /// testing_event_notifier returns an `EventNotifier` that sends its events
 /// to an EventBufferCollector.
-pub async fn testing_event_notifier() -> (EventNotifier, EventBufferCollector) {
+async fn testing_event_notifier() -> (EventNotifier, EventBufferCollector) {
     let (send_ev, rx_ev) = mpsc::channel(1);
     let notifier = EventNotifier::from_mpsc(send_ev);
     let buffer = EventBufferCollector::from_mpsc(rx_ev).await;
