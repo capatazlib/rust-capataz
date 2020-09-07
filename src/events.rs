@@ -193,17 +193,18 @@ impl EventBufferCollector {
 
 /// EventAssert is a well-defined function that asserts properties from an Event
 /// emitted by a running supervision tree.
-pub struct EventAssert(Box<dyn Fn(Event) -> String>);
+pub struct EventAssert(Box<dyn Fn(Event) -> Option<String>>);
 
 impl EventAssert {
-    fn call(&self, ev: Event) -> String {
+    fn call(&self, ev: Event) -> Option<String> {
         (*self.0)(ev)
     }
     pub fn check(&self, ev: Event) {
         let result = self.call(ev);
-        if result.len() != 0 {
-            panic!("EventAssert failed: {}", result);
-        }
+        match result {
+            None => (),
+            Some(err_msg) => panic!("EventAssert failed: {}", result),
+        };
     }
 }
 
@@ -213,15 +214,15 @@ pub fn supervisor_started(input_name: &'static str) -> EventAssert {
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorStarted(NodeData { runtime_name }) => {
             if runtime_name != input_name {
-                format!(
+                Some(format!(
                     "Expecting SupervisorStarted with name {}; got {:?} instead",
                     input_name, ev
-                )
+                ))
             } else {
-                "".to_owned()
+                None
             }
         }
-        _ => format!("Expecting SupervisorStarted; got {:?} instead", ev),
+        _ => Some(format!("Expecting SupervisorStarted; got {:?} instead", ev)),
     }))
 }
 
@@ -231,15 +232,18 @@ pub fn supervisor_terminated(input_name: &'static str) -> EventAssert {
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorTerminated(NodeData { runtime_name }) => {
             if runtime_name != input_name {
-                format!(
+                Some(format!(
                     "Expecting SupervisorTerminated with name {}; got {:?} instead",
                     input_name, ev
-                )
+                ))
             } else {
-                "".to_owned()
+                None
             }
         }
-        _ => format!("Expecting SupervisorTerminated; got {:?} instead", ev),
+        _ => Some(format!(
+            "Expecting SupervisorTerminated; got {:?} instead",
+            ev
+        )),
     }))
 }
 
@@ -255,15 +259,15 @@ pub fn worker_started(input_name: &'static str) -> EventAssert {
                 input_name
             );
             if runtime_name != input_name {
-                format!(
+                Some(format!(
                     "Expecting WorkerStarted with name {}; got {:?} instead",
                     input_name, ev
-                )
+                ))
             } else {
-                "".to_owned()
+                None
             }
         }
-        _ => format!("Expecting WorkerStarted; got {:?} instead", ev),
+        _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
     }))
 }
 
@@ -273,15 +277,15 @@ pub fn worker_terminated(input_name: &'static str) -> EventAssert {
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerTerminated(NodeData { runtime_name }) => {
             if runtime_name != input_name {
-                format!(
+                Some(format!(
                     "Expecting WorkerTerminated with name {}; got {:?} instead",
                     input_name, ev
-                )
+                ))
             } else {
-                "".to_owned()
+                None
             }
         }
-        _ => format!("Expecting WorkerTerminated; got {:?} instead", ev),
+        _ => Some(format!("Expecting WorkerTerminated; got {:?} instead", ev)),
     }))
 }
 
