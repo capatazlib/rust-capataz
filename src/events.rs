@@ -252,12 +252,6 @@ pub fn supervisor_terminated(input_name: &'static str) -> EventAssert {
 pub fn worker_started(input_name: &'static str) -> EventAssert {
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerStarted(NodeData { runtime_name }) => {
-            println!(
-                "{} {} {}",
-                runtime_name == input_name,
-                runtime_name,
-                input_name
-            );
             if runtime_name != input_name {
                 Some(format!(
                     "Expecting WorkerStarted with name {}; got {:?} instead",
