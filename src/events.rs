@@ -62,76 +62,84 @@ impl EventNotifier {
         (self.0)(ev).await
     }
 
-    pub async fn supervisor_started(&mut self, runtime_name: &str) {
+    pub async fn supervisor_started(&mut self, runtime_name: impl Into<String>) {
         self.notify(Event::SupervisorStarted(NodeData {
-            runtime_name: runtime_name.to_owned(),
+            runtime_name: runtime_name.into(),
         }))
         .await
     }
 
-    pub async fn supervisor_start_failed(&mut self, runtime_name: &str, err: Arc<anyhow::Error>) {
+    pub async fn supervisor_start_failed(
+        &mut self,
+        runtime_name: impl Into<String>,
+        err: Arc<anyhow::Error>,
+    ) {
         self.notify(Event::SupervisorStartFailed(
             NodeData {
-                runtime_name: runtime_name.to_owned(),
+                runtime_name: runtime_name.into(),
             },
             err,
         ))
         .await
     }
 
-    pub async fn supervisor_terminated(&mut self, runtime_name: &str) {
+    pub async fn supervisor_terminated(&mut self, runtime_name: impl Into<String>) {
         self.notify(Event::SupervisorTerminated(NodeData {
-            runtime_name: runtime_name.to_owned(),
+            runtime_name: runtime_name.into(),
         }))
         .await
     }
 
     pub async fn supervisor_termination_failed(
         &mut self,
-        runtime_name: &str,
+        runtime_name: impl Into<String>,
         err: Arc<anyhow::Error>,
     ) {
         self.notify(Event::SupervisorTerminationFailed(
             NodeData {
-                runtime_name: runtime_name.to_owned(),
+                runtime_name: runtime_name.into(),
             },
             err,
         ))
         .await
     }
 
-    pub async fn worker_started(&mut self, runtime_name: &str) {
+    pub async fn worker_started(&mut self, runtime_name: impl Into<String>) {
         self.notify(Event::WorkerStarted(NodeData {
-            runtime_name: runtime_name.to_owned(),
+            runtime_name: runtime_name.into(),
         }))
         .await
     }
 
-    pub async fn worker_start_failed(&mut self, runtime_name: &str, err: Arc<worker::StartError>) {
+    pub async fn worker_start_failed(
+        &mut self,
+        runtime_name: impl Into<String>,
+        err: Arc<worker::StartError>,
+    ) {
         self.notify(Event::WorkerStartFailed(
             NodeData {
-                runtime_name: runtime_name.to_owned(),
+                runtime_name: runtime_name.into(),
             },
             err,
         ))
         .await
     }
 
-    pub async fn worker_terminated(&mut self, runtime_name: &str) {
+    pub async fn worker_terminated(&mut self, runtime_name: impl Into<String>) {
         self.notify(Event::WorkerTerminated(NodeData {
-            runtime_name: runtime_name.to_owned(),
+            runtime_name: runtime_name.into(),
         }))
         .await
     }
 
     pub async fn worker_termination_failed(
         &mut self,
-        runtime_name: &str,
+        runtime_name: impl Into<String>,
         err: Arc<worker::TerminationError>,
     ) {
         self.notify(Event::WorkerTerminationFailed(
             NodeData {
-                runtime_name: runtime_name.to_owned(),
+                runtime_name: runtime_name.into(),
             },
             err,
         ))
