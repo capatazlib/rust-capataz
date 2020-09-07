@@ -194,7 +194,7 @@ impl EventAssert {
     pub fn check(&self, ev: Event) {
         let result = self.call(ev);
         if result.len() != 0 {
-            assert!(false, result);
+            panic!("EventAssert failed: {}", result);
         }
     }
 }
