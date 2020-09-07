@@ -8,7 +8,7 @@ mod events;
 mod worker;
 
 pub use context::Context;
-pub use events::{testing_event_notifier, Event, EventNotifier};
+pub use events::{Event, EventNotifier};
 pub use worker::{Restart, Shutdown, StartNotifier};
 
 pub type Worker = worker::Spec;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tokio::task::{self, JoinHandle};
 
 use crate::worker;
@@ -203,7 +203,7 @@ impl EventAssert {
         let result = self.call(ev);
         match result {
             None => (),
-            Some(err_msg) => panic!("EventAssert failed: {}", result),
+            Some(err_msg) => panic!("EventAssert failed: {}", err_msg),
         };
     }
 }
