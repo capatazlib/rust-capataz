@@ -266,6 +266,22 @@ pub fn worker_started(input_name: &'static str) -> EventAssert {
     }))
 }
 
+pub fn worker_start_failed(input_name: &'static str) -> EventAssert {
+    EventAssert(Box::new(move |ev| match &ev {
+        Event::WorkerStartFailed(NodeData { runtime_name }, _) => {
+            if runtime_name != input_name {
+                Some(format!(
+                    "Expecting WorkerStartFailed with name {}; got {:?} instead",
+                    input_name, ev
+                ))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
+    }))
+}
+
 /// worker_terminated asserts an event that tells a worker with the given name
 /// was terminated
 pub fn worker_terminated(input_name: &'static str) -> EventAssert {
@@ -281,6 +297,25 @@ pub fn worker_terminated(input_name: &'static str) -> EventAssert {
             }
         }
         _ => Some(format!("Expecting WorkerTerminated; got {:?} instead", ev)),
+    }))
+}
+
+pub fn worker_termination_failed(input_name: &'static str) -> EventAssert {
+    EventAssert(Box::new(move |ev| match &ev {
+        Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
+            if runtime_name != input_name {
+                Some(format!(
+                    "Expecting WorkerTerminationFailed with name {}; got {:?} instead",
+                    input_name, ev
+                ))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!(
+            "Expecting WorkerTerminationFailed; got {:?} instead",
+            ev
+        )),
     }))
 }
 

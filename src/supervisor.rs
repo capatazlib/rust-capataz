@@ -18,9 +18,9 @@ pub enum Strategy {
 
 #[derive(Debug)]
 pub struct StartError {
-    failing_child_runtime_name: String,
-    failing_child_error: Arc<worker::StartError>,
-    failing_sibling_termination_error: Option<TerminationError>,
+    pub failing_child_runtime_name: String,
+    pub failing_child_error: Arc<worker::StartError>,
+    pub failing_sibling_termination_error: Option<TerminationError>,
 }
 
 #[derive(Debug)]
@@ -99,6 +99,8 @@ async fn terminate_prev_siblings<'a, 'b, 'c>(
     (children_spec, start_err)
 }
 
+// StartResult is an internal state machine used when starting workers in a
+// supervisor
 enum StartResult {
     SuccessfulStart {
         started_workers: Vec<Worker>,
@@ -125,47 +127,63 @@ impl StartResult {
         ctx: &Context,
         mut ev_notifier: EventNotifier,
         sup_runtime_name: &str,
-        failed_child_spec: worker::Spec,
+        child_spec: worker::Spec,
     ) -> Self {
         match self {
             StartResult::SuccessfulStart {
                 mut started_workers,
                 pending_count,
             } => {
-                let result = failed_child_spec.start(ctx, sup_runtime_name).await;
+                let result = child_spec.start(ctx, sup_runtime_name).await;
                 match result {
+                    // when the child_spec starts without hiccups
                     Ok(started_worker) => {
+                        // send event notification indicating that the worker was started
                         ev_notifier
                             .worker_started(&started_worker.runtime_name)
                             .await;
+                        // append the worker to the started workers vector
                         started_workers.push(started_worker);
+                        // keep pending_count up to date
                         let pending_count: usize = pending_count - 1;
+                        //
                         StartResult::SuccessfulStart {
                             started_workers,
                             pending_count,
                         }
                     }
+                    // when the child_spec failed to start
                     Err((failed_worker_spec, start_error0)) => {
+                        let child_runtime_name =
+                            format!("{}/{}", sup_runtime_name, failed_worker_spec.name);
                         let start_error = Arc::new(start_error0);
+                        // send event notification indicating that the worker failed to start
                         ev_notifier
-                            .worker_start_failed("", start_error.clone())
+                            .worker_start_failed(child_runtime_name, start_error.clone())
                             .await;
+                        // transform current start to FailedStart
                         StartResult::FailedStart {
                             failed_worker_spec,
                             start_error,
+                            // store the already started workers so that we can
+                            // later terminate them
                             prev_started_workers: started_workers,
+                            // use the updated pending_count entry to get the
+                            // remaining pending_workers vec size
                             pending_workers: Vec::with_capacity(pending_count),
                         }
                     }
                 }
             }
+            // If we already have a failed start, we just append entries to the
+            // pending_workers vec
             StartResult::FailedStart {
                 failed_worker_spec,
                 start_error,
                 prev_started_workers,
                 mut pending_workers,
             } => {
-                pending_workers.push(failed_child_spec);
+                pending_workers.push(child_spec);
                 StartResult::FailedStart {
                     failed_worker_spec,
                     start_error,
@@ -377,13 +395,19 @@ impl Supervisor {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use tokio::time;
 
     use crate::context::*;
     use crate::events::{
-        supervisor_started, testing_event_notifier, worker_started, worker_terminated,
+        supervisor_started, testing_event_notifier, worker_start_failed, worker_started,
+        worker_terminated, worker_termination_failed,
     };
     use crate::supervisor;
-    use crate::worker::tests::wait_done_worker;
+    use crate::worker::tests::{
+        start_err_worker, start_timeout_worker, termination_failed_worker, wait_done_worker,
+    };
 
     #[tokio::test]
     async fn test_simple_start_and_stop_with_one_child() {
@@ -447,5 +471,144 @@ mod tests {
                 worker_terminated("/root/one"),
             ])
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_failing_start_with_multiple_children() {
+        let (event_notifier, event_buffer) = testing_event_notifier().await;
+        let spec = supervisor::Spec::new(
+            "root",
+            vec![
+                wait_done_worker("one"),
+                start_err_worker("two", "boom"),
+                wait_done_worker("three"),
+            ],
+            event_notifier,
+        );
+
+        let ctx = Context::new();
+
+        let start_result = spec.start(&ctx).await;
+        let start_err = start_result
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("supervisor start must fail");
+
+        assert!(start_err.failing_child_error.is_worker_init_error());
+
+        event_buffer
+            .assert_exact(vec![
+                worker_started("/root/one"),
+                worker_start_failed("/root/two"),
+                worker_terminated("/root/one"),
+                // supervisor_start_failed("/root"),
+            ])
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_timeout_start_with_multiple_children() {
+        let (event_notifier, event_buffer) = testing_event_notifier().await;
+        let spec = supervisor::Spec::new(
+            "root",
+            vec![
+                wait_done_worker("one"),
+                wait_done_worker("two"),
+                start_timeout_worker(
+                    "three",
+                    Duration::from_secs(1), // timeout
+                    Duration::from_secs(3), // delay
+                ),
+            ],
+            event_notifier,
+        );
+
+        let ctx = Context::new();
+
+        time::pause();
+
+        let start_fut = spec.start(&ctx);
+
+        time::advance(Duration::from_secs(4)).await;
+
+        let start_result = start_fut.await;
+        let start_err = start_result
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("supervisor start must fail");
+
+        assert!(start_err.failing_child_error.is_timeout_error());
+
+        event_buffer
+            .assert_exact(vec![
+                worker_started("/root/one"),
+                worker_started("/root/two"),
+                worker_start_failed("/root/three"),
+                worker_terminated("/root/two"),
+                worker_terminated("/root/one"),
+                // supervisor_start_failed("/root"),
+            ])
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_start_timeout_and_termination_timeout_with_multiple_children() {
+        let (event_notifier, event_buffer) = testing_event_notifier().await;
+        let spec = supervisor::Spec::new(
+            "root",
+            vec![
+                wait_done_worker("one"),
+                termination_failed_worker("two"),
+                start_timeout_worker(
+                    "three",
+                    Duration::from_secs(1), // timeout
+                    Duration::from_secs(3), // delay
+                ),
+            ],
+            event_notifier,
+        );
+
+        let ctx = Context::new();
+
+        time::pause();
+
+        let start_fut = spec.start(&ctx);
+
+        time::advance(Duration::from_secs(4)).await;
+
+        let start_result = start_fut.await;
+        let start_err = start_result
+            .map(|_| ())
+            .map_err(|err| err.1)
+            .expect_err("supervisor start must fail");
+
+        event_buffer
+            .assert_exact(vec![
+                worker_started("/root/one"),
+                worker_started("/root/two"),
+                worker_start_failed("/root/three"),
+                worker_termination_failed("/root/two"),
+                worker_terminated("/root/one"),
+                // supervisor_start_failed("/root"),
+            ])
+            .await;
+
+        // there is a timeout error
+        assert!(start_err.failing_child_error.is_timeout_error());
+        // there is an entry in the termination error
+        let mtermination_err = start_err.failing_sibling_termination_error.as_ref();
+        match mtermination_err {
+            None => panic!("termination error should be present"),
+            Some(ref termination_err) => {
+                assert!(
+                    !termination_err.0.is_empty(),
+                    "termination error map must not be empty"
+                );
+                termination_err
+                    .0
+                    .get("/root/two")
+                    .expect("termination error must be in '/root/two' child");
+            }
+        }
     }
 }

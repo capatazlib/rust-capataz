@@ -58,7 +58,7 @@ pub enum TerminationError {
 }
 
 impl TerminationError {
-    fn is_timeout_error(&self) -> bool {
+    pub fn is_timeout_error(&self) -> bool {
         match self {
             TerminationError::TimeoutError { .. } => true,
             _ => false,
@@ -108,7 +108,7 @@ pub enum StartError {
 }
 
 impl StartError {
-    fn is_timeout_error(&self) -> bool {
+    pub fn is_timeout_error(&self) -> bool {
         match self {
             StartError::TimeoutError { .. } => true,
             _ => false,
@@ -423,14 +423,18 @@ pub mod tests {
         })
     }
 
-    fn start_err_worker(name: &str, err_msg: &'static str) -> worker::Spec {
+    pub fn start_err_worker(name: &str, err_msg: &'static str) -> worker::Spec {
         worker::Spec::new_with_start(name, move |_: Context, start: StartNotifier| async move {
             start.failed(anyhow::Error::msg(err_msg.to_owned()));
             Err(anyhow::Error::msg("should not see this"))
         })
     }
 
-    fn start_timeout_worker(name: &str, start_timeout: Duration, delay: Duration) -> worker::Spec {
+    pub fn start_timeout_worker(
+        name: &str,
+        start_timeout: Duration,
+        delay: Duration,
+    ) -> worker::Spec {
         let spec = worker::Spec::new_with_start(
             name,
             move |_: Context, start: StartNotifier| async move {
@@ -458,7 +462,7 @@ pub mod tests {
         })
     }
 
-    fn termination_failed_worker(name: &str) -> worker::Spec {
+    pub fn termination_failed_worker(name: &str) -> worker::Spec {
         worker::Spec::new(name, move |ctx: Context| async move {
             ctx.done.await;
             Err(anyhow::Error::msg("termination_failed_worker"))
