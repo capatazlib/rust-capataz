@@ -33,7 +33,7 @@ type NotifyFn = Box<dyn Fn(Event) -> BoxFuture<'static, ()> + Send>;
 /// EventNotifier is used by the internal supervision API to send events about a
 /// running supervision tree
 #[derive(Clone)]
-pub struct EventNotifier(Arc<Mutex<NotifyFn>>);
+pub struct EventNotifier(Arc<NotifyFn>);
 
 impl EventNotifier {
     pub fn new<F, O>(notify0: F) -> Self
@@ -45,7 +45,7 @@ impl EventNotifier {
             let fut = notify0(ev);
             fut.boxed()
         };
-        EventNotifier(Arc::new(Mutex::new(Box::new(notify))))
+        EventNotifier(Arc::new(Box::new(notify)))
     }
 
     pub fn from_mpsc(sender: mpsc::Sender<Event>) -> Self {
@@ -59,8 +59,7 @@ impl EventNotifier {
     }
 
     async fn notify(&self, ev: Event) {
-        let notifier: MutexGuard<NotifyFn> = self.0.lock().await;
-        notifier(ev).await
+        (self.0)(ev).await
     }
 
     pub async fn supervisor_started(&mut self, runtime_name: &str) {
