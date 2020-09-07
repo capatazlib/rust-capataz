@@ -28,7 +28,7 @@ pub struct NodeData {
 
 /// NotifyFn is used by the supervision API to send events to an interested
 /// listener.
-type NotifyFn = Box<dyn Fn(Event) -> BoxFuture<'static, ()> + Send>;
+type NotifyFn = Box<dyn Fn(Event) -> BoxFuture<'static, ()>>;
 
 /// EventNotifier is used by the internal supervision API to send events about a
 /// running supervision tree
@@ -38,7 +38,7 @@ pub struct EventNotifier(Arc<NotifyFn>);
 impl EventNotifier {
     pub fn new<F, O>(notify0: F) -> Self
     where
-        F: Fn(Event) -> O + Send + 'static,
+        F: Fn(Event) -> O + 'static,
         O: Future<Output = ()> + FutureExt + Send + 'static,
     {
         let notify = move |ev| {
