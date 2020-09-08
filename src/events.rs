@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::{mpsc, Mutex, MutexGuard};
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::{self, JoinHandle};
 
+use crate::supervisor;
 use crate::worker;
 
 /// Event represents all the different events that may happen on a running
@@ -11,9 +12,9 @@ use crate::worker;
 #[derive(Debug, Clone)]
 pub enum Event {
     SupervisorStarted(NodeData),
-    SupervisorStartFailed(NodeData, Arc<anyhow::Error>),
+    SupervisorStartFailed(NodeData, Arc<supervisor::StartError>),
     SupervisorTerminated(NodeData),
-    SupervisorTerminationFailed(NodeData, Arc<anyhow::Error>),
+    SupervisorTerminationFailed(NodeData, Arc<supervisor::TerminationError>),
     WorkerStarted(NodeData),
     WorkerStartFailed(NodeData, Arc<worker::StartError>),
     WorkerTerminated(NodeData),
@@ -72,7 +73,7 @@ impl EventNotifier {
     pub async fn supervisor_start_failed(
         &mut self,
         runtime_name: impl Into<String>,
-        err: Arc<anyhow::Error>,
+        err: Arc<supervisor::StartError>,
     ) {
         self.notify(Event::SupervisorStartFailed(
             NodeData {
@@ -93,7 +94,7 @@ impl EventNotifier {
     pub async fn supervisor_termination_failed(
         &mut self,
         runtime_name: impl Into<String>,
-        err: Arc<anyhow::Error>,
+        err: Arc<supervisor::TerminationError>,
     ) {
         self.notify(Event::SupervisorTerminationFailed(
             NodeData {
