@@ -201,9 +201,8 @@ impl EventAssert {
     }
     pub fn check(&self, ev: Event) {
         let result = self.call(ev);
-        match result {
-            None => (),
-            Some(err_msg) => panic!("EventAssert failed: {}", err_msg),
+        if let Some(err_msg) = result {
+            panic!("EventAssert failed: {}", err_msg);
         };
     }
 }
