@@ -281,7 +281,7 @@ impl Spec {
             Ok(children) => {
                 ev_notifier.supervisor_started(&sup_runtime_name).await;
                 Ok(Supervisor {
-                    runtime_name: sup_runtime_name.to_owned(),
+                    runtime_name: sup_runtime_name,
                     children,
                     meta,
                 })
