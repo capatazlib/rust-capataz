@@ -210,10 +210,11 @@ impl EventAssert {
 
 /// supervisor_started asserts an event that tells a supervisor with the given
 /// name started
-pub fn supervisor_started(input_name: &'static str) -> EventAssert {
+pub fn supervisor_started(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorStarted(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting SupervisorStarted with name {}; got {:?} instead",
                     input_name, ev
@@ -228,10 +229,11 @@ pub fn supervisor_started(input_name: &'static str) -> EventAssert {
 
 /// supervisor_terminated asserts an event that tells a supervisor with the given
 /// name was terminated
-pub fn supervisor_terminated(input_name: &'static str) -> EventAssert {
+pub fn supervisor_terminated(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorTerminated(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting SupervisorTerminated with name {}; got {:?} instead",
                     input_name, ev
@@ -249,10 +251,11 @@ pub fn supervisor_terminated(input_name: &'static str) -> EventAssert {
 
 /// worker_started asserts an event that tells a worker with the given name
 /// started
-pub fn worker_started(input_name: &'static str) -> EventAssert {
+pub fn worker_started(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerStarted(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting WorkerStarted with name {}; got {:?} instead",
                     input_name, ev
@@ -265,10 +268,11 @@ pub fn worker_started(input_name: &'static str) -> EventAssert {
     }))
 }
 
-pub fn worker_start_failed(input_name: &'static str) -> EventAssert {
+pub fn worker_start_failed(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerStartFailed(NodeData { runtime_name }, _) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting WorkerStartFailed with name {}; got {:?} instead",
                     input_name, ev
@@ -283,10 +287,11 @@ pub fn worker_start_failed(input_name: &'static str) -> EventAssert {
 
 /// worker_terminated asserts an event that tells a worker with the given name
 /// was terminated
-pub fn worker_terminated(input_name: &'static str) -> EventAssert {
+pub fn worker_terminated(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerTerminated(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting WorkerTerminated with name {}; got {:?} instead",
                     input_name, ev
