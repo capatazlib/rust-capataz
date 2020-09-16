@@ -22,7 +22,7 @@ impl Order {
         &self,
         lifecycle: Lifecycle,
         children: Vec<A>,
-    ) -> Box<dyn Iterator<Item = A>> {
+    ) -> Box<dyn DoubleEndedIterator<Item = A>> {
         let iterator = children.into_iter();
         match (self, lifecycle) {
             (Order::LeftToRight, Lifecycle::Start)
@@ -70,11 +70,12 @@ pub struct Supervisor {
 
 // terminate_prev_siblings gets called when a child in a supervision tree fails
 // to start, and all it's previous siblings need to get terminated.
-async fn terminate_prev_siblings<'a, 'b, 'c>(
+async fn terminate_prev_siblings<I: DoubleEndedIterator<Item = worker::Spec>>(
     ev_notifier: &mut EventNotifier,
+    order: Order,
     failed_child_spec: worker::Spec,
     failed_child_start_err: Arc<worker::StartError>,
-    pending_children_specs: Vec<worker::Spec>,
+    pending_children_specs: I,
     started_children: Vec<Worker>,
 ) -> (Vec<worker::Spec>, StartError) {
     let prev_sibling_termination_result =
@@ -91,113 +92,61 @@ async fn terminate_prev_siblings<'a, 'b, 'c>(
         failing_sibling_termination_error,
     };
 
-    // regenerate the original vector of worker
-    // specs so that the parent supervisor can try
-    // again if it is able to do it
-    let children_spec: Vec<worker::Spec> = prev_specs
+    // regenerate the original vector of worker specs so that the parent
+    // supervisor can try again if it is allowed to do it
+
+    let children_iterator = prev_specs
         .into_iter()
         .chain(std::iter::once(failed_child_spec))
-        .chain(pending_children_specs.into_iter())
-        .collect();
+        .chain(pending_children_specs);
+
+    // if we started from right to left, the list must be reversed
+
+    let children_spec = match order {
+        Order::LeftToRight => children_iterator.collect(),
+        Order::RightToLeft => children_iterator.rev().collect(),
+    };
 
     (children_spec, start_err)
 }
 
-// StartResult is an internal state machine used when starting workers in a
-// supervisor
-enum StartResult {
-    SuccessfulStart {
-        started_workers: Vec<Worker>,
-        pending_count: usize,
-    },
-    FailedStart {
-        prev_started_workers: Vec<Worker>,
-        failed_worker_spec: worker::Spec,
-        start_error: Arc<worker::StartError>,
-        pending_workers: Vec<worker::Spec>,
-    },
-}
-
-impl StartResult {
-    fn new(pending_count: usize) -> Self {
-        StartResult::SuccessfulStart {
-            started_workers: Vec::with_capacity(pending_count),
-            pending_count,
+// start_child enhances the worker::Spec start logic, by also performing
+// notifications to the supervision system.
+async fn start_child(
+    ctx: &Context,
+    mut ev_notifier: EventNotifier,
+    sup_runtime_name: &str,
+    child_spec: worker::Spec,
+) -> Result<worker::Worker, (worker::Spec, Arc<worker::StartError>)> {
+    match child_spec.start(ctx, sup_runtime_name).await {
+        // when the child_spec starts without hiccups
+        Ok(started_worker) => {
+            // send event notification indicating that the worker was started
+            ev_notifier
+                .worker_started(&started_worker.runtime_name)
+                .await;
+            Ok(started_worker)
         }
-    }
-
-    async fn start_child(
-        self,
-        ctx: &Context,
-        mut ev_notifier: EventNotifier,
-        sup_runtime_name: &str,
-        child_spec: worker::Spec,
-    ) -> Self {
-        match self {
-            StartResult::SuccessfulStart {
-                mut started_workers,
-                pending_count,
-            } => {
-                match child_spec.start(ctx, sup_runtime_name).await {
-                    // when the child_spec starts without hiccups
-                    Ok(started_worker) => {
-                        // send event notification indicating that the worker was started
-                        ev_notifier
-                            .worker_started(&started_worker.runtime_name)
-                            .await;
-                        // append the worker to the started workers vector
-                        started_workers.push(started_worker);
-                        // keep pending_count up to date
-                        let pending_count: usize = pending_count - 1;
-                        //
-                        StartResult::SuccessfulStart {
-                            started_workers,
-                            pending_count,
-                        }
-                    }
-                    // when the child_spec failed to start
-                    Err((failed_worker_spec, start_error0)) => {
-                        let child_runtime_name =
-                            format!("{}/{}", sup_runtime_name, failed_worker_spec.name);
-                        let start_error = Arc::new(start_error0);
-                        // send event notification indicating that the worker failed to start
-                        ev_notifier
-                            .worker_start_failed(child_runtime_name, start_error.clone())
-                            .await;
-                        // transform current start to FailedStart
-                        StartResult::FailedStart {
-                            failed_worker_spec,
-                            start_error,
-                            // store the already started workers so that we can
-                            // later terminate them
-                            prev_started_workers: started_workers,
-                            // use the updated pending_count entry to get the
-                            // remaining pending_workers vec size
-                            pending_workers: Vec::with_capacity(pending_count),
-                        }
-                    }
-                }
-            }
-            // If we already have a failed start, we just append entries to the
-            // pending_workers vec
-            StartResult::FailedStart {
-                failed_worker_spec,
-                start_error,
-                prev_started_workers,
-                mut pending_workers,
-            } => {
-                pending_workers.push(child_spec);
-                StartResult::FailedStart {
-                    failed_worker_spec,
-                    start_error,
-                    prev_started_workers,
-                    pending_workers,
-                }
-            }
+        // when the child_spec failed to start
+        Err((failed_worker_spec, start_error0)) => {
+            let child_runtime_name = format!("{}/{}", sup_runtime_name, failed_worker_spec.name);
+            let start_error = Arc::new(start_error0);
+            // send event notification indicating that the worker failed to start
+            ev_notifier
+                .worker_start_failed(child_runtime_name, start_error.clone())
+                .await;
+            Err((failed_worker_spec, start_error))
         }
     }
 }
 
+// start_children bootstrap the children of a supervision tree, it will:
+//
+// * Execute start logic per worker
+// * Halt start sequence if one of the workers fails to start (due to start error, timeout, etc.)
+// * Terminate previously started workers in case there is a failure
+// * Trigger supervision system events for any start, stop or error detected.
+//
 async fn start_children<'a>(
     ctx: &'a Context,
     mut ev_notifier: EventNotifier,
@@ -206,37 +155,34 @@ async fn start_children<'a>(
     // TODO: receive error notifier parameter
     children_specs: Vec<worker::Spec>,
 ) -> Result<Vec<Worker>, (Vec<worker::Spec>, StartError)> {
-    let mut start_result = StartResult::new(children_specs.len());
-    let pending_children: Box<dyn Iterator<Item = worker::Spec>> =
-        sup_order.sort(Lifecycle::Start, children_specs);
+    // let mut start_result = StartResult::new(children_specs.len());
 
-    for failed_child_spec in pending_children {
-        start_result = start_result
-            .start_child(
-                ctx,
-                ev_notifier.clone(),
-                sup_runtime_name,
-                failed_child_spec,
-            )
-            .await;
+    let mut started_children = Vec::with_capacity(children_specs.len());
+    let mut pending_children = sup_order.sort(Lifecycle::Start, children_specs);
+    let mut err = None;
+
+    for child_spec in &mut pending_children {
+        match start_child(ctx, ev_notifier.clone(), sup_runtime_name, child_spec).await {
+            Ok(worker) => {
+                started_children.push(worker);
+            }
+            Err(err_result) => {
+                err = Some(err_result);
+                break;
+            }
+        }
     }
 
-    match start_result {
-        StartResult::SuccessfulStart {
-            started_workers, ..
-        } => Ok(started_workers),
-        StartResult::FailedStart {
-            failed_worker_spec,
-            start_error,
-            prev_started_workers,
-            pending_workers,
-        } => {
+    match err {
+        None => Ok(started_children),
+        Some((failed_worker_spec, start_error)) => {
             let termination_result = terminate_prev_siblings(
                 &mut ev_notifier,
+                sup_order,
                 failed_worker_spec,
                 start_error,
-                pending_workers,
-                prev_started_workers,
+                pending_children,
+                started_children,
             )
             .await;
             Err(termination_result)
@@ -246,6 +192,9 @@ async fn start_children<'a>(
 
 // terminate_children terminates each worker::Worker record. In case any of the
 // children fail to terminate a supervisor::TerminationError is returned.
+//
+// In the scenario a child worker fails to terminate, this function will
+// continue the termination of the rest of it's siblings in the correct order.
 //
 async fn terminate_children<'a>(
     ev_notifier: &mut EventNotifier,
@@ -301,8 +250,8 @@ impl Spec {
     ) -> Result<Supervisor, (Spec, Arc<StartError>)> {
         let (ctx, _terminate_supervisor) = Context::with_cancel(parent_ctx);
 
-        let meta = self.meta;
         let mut ev_notifier = self.meta.ev_notifier.clone();
+        let meta = self.meta;
 
         let sup_runtime_name = format!("{}/{}", parent_name, meta.name);
         let result = start_children(
