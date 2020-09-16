@@ -252,8 +252,7 @@ async fn terminate_children<'a>(
     let mut termination_errors: HashMap<String, Arc<worker::TerminationError>> = HashMap::new();
     for runtime_child in runtime_children {
         let child_runtime_name = runtime_child.runtime_name.to_owned();
-        let result = runtime_child.terminate().await;
-        match result {
+        match runtime_child.terminate().await {
             Err((failed_child_spec, termination_err0)) => {
                 let termination_err = Arc::new(termination_err0);
                 ev_notifier
