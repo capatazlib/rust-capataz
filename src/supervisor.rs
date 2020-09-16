@@ -92,7 +92,7 @@ async fn terminate_prev_siblings<'a, 'b, 'c>(
     // again if it is able to do it
     let children_spec: Vec<worker::Spec> = prev_specs
         .into_iter()
-        .chain(vec![failed_child_spec].into_iter())
+        .chain(std::iter::once(failed_child_spec))
         .chain(pending_children_specs.into_iter())
         .collect();
 
