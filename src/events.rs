@@ -304,10 +304,11 @@ pub fn worker_terminated(input_name0: &str) -> EventAssert {
     }))
 }
 
-pub fn worker_termination_failed(input_name: &'static str) -> EventAssert {
+pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting WorkerTerminationFailed with name {}; got {:?} instead",
                     input_name, ev
