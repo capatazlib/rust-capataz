@@ -355,12 +355,14 @@ impl Spec {
 
 impl Supervisor {
     pub async fn terminate(self) -> Result<Spec, (Spec, Arc<TerminationError>)> {
-        let name = self.name;
-        let runtime_name = self.runtime_name;
-        let order = self.order;
-        let strategy = self.strategy;
-        let mut ev_notifier = self.ev_notifier;
-        let runtime_children = ordered_children_on_termination(&order, self.children);
+        let Supervisor { 
+            name, 
+            runtime_name, 
+            order, strategy, 
+            mut ev_notifier, 
+            children 
+        } = self;
+        let runtime_children = ordered_children_on_termination(&order, children);
 
         let result = terminate_children(&mut ev_notifier, runtime_children).await;
         match result {
