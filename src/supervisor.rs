@@ -134,8 +134,7 @@ impl StartResult {
                 mut started_workers,
                 pending_count,
             } => {
-                let result = child_spec.start(ctx, sup_runtime_name).await;
-                match result {
+                match child_spec.start(ctx, sup_runtime_name).await {
                     // when the child_spec starts without hiccups
                     Ok(started_worker) => {
                         // send event notification indicating that the worker was started
