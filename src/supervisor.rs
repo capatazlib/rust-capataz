@@ -81,8 +81,8 @@ async fn terminate_prev_siblings<'a, 'b, 'c>(
         terminate_children(ev_notifier, started_children.into_iter().rev()).await;
 
     let (prev_specs, failing_sibling_termination_error) = match prev_sibling_termination_result {
-        Err((prev_specs, sibling_err)) => (prev_specs, Some(sibling_err)),
-        Ok(prev_specs) => (prev_specs, None),
+        (prev_specs, Err(sibling_err)) => (prev_specs, Some(sibling_err)),
+        (prev_specs, _) => (prev_specs, None),
     };
 
     let start_err = StartError {
@@ -250,7 +250,7 @@ async fn start_children<'a>(
 async fn terminate_children<'a>(
     ev_notifier: &mut EventNotifier,
     runtime_children: impl Iterator<Item = Worker>,
-) -> Result<Vec<worker::Spec>, (Vec<worker::Spec>, TerminationError)> {
+) -> (Vec<worker::Spec>, Result<(), TerminationError>) {
     let mut children_specs = Vec::new();
     let mut termination_errors: HashMap<String, Arc<worker::TerminationError>> = HashMap::new();
     for runtime_child in runtime_children {
@@ -265,17 +265,15 @@ async fn terminate_children<'a>(
                 children_specs.push(failed_child_spec);
             }
             Ok(failed_child_spec) => {
-                ev_notifier
-                    .worker_terminated(child_runtime_name.clone())
-                    .await;
+                ev_notifier.worker_terminated(child_runtime_name).await;
                 children_specs.push(failed_child_spec);
             }
         }
     }
     if termination_errors.is_empty() {
-        Ok(children_specs)
+        (children_specs, Ok(()))
     } else {
-        Err((children_specs, TerminationError(termination_errors)))
+        (children_specs, Err(TerminationError(termination_errors)))
     }
 }
 
@@ -303,7 +301,8 @@ impl Spec {
     ) -> Result<Supervisor, (Spec, Arc<StartError>)> {
         let (ctx, _terminate_supervisor) = Context::with_cancel(parent_ctx);
 
-        let mut meta = self.meta;
+        let meta = self.meta;
+        let mut ev_notifier = self.meta.ev_notifier.clone();
 
         let sup_runtime_name = format!("{}/{}", parent_name, meta.name);
         let result = start_children(
@@ -318,7 +317,7 @@ impl Spec {
         match result {
             Err((children_specs, err)) => {
                 let err = Arc::new(err);
-                meta.ev_notifier
+                ev_notifier
                     .supervisor_start_failed(&sup_runtime_name, err.clone())
                     .await;
                 let spec = Spec {
@@ -328,7 +327,7 @@ impl Spec {
                 return Err((spec, err));
             }
             Ok(children) => {
-                meta.ev_notifier.supervisor_started(&sup_runtime_name).await;
+                ev_notifier.supervisor_started(&sup_runtime_name).await;
                 Ok(Supervisor {
                     runtime_name: sup_runtime_name.to_owned(),
                     children,
@@ -348,33 +347,33 @@ impl Spec {
 }
 
 impl Supervisor {
-    pub async fn terminate(self) -> Result<Spec, (Spec, Arc<TerminationError>)> {
+    pub async fn terminate(self) -> (Spec, Result<(), Arc<TerminationError>>) {
         let Supervisor {
             runtime_name,
-            mut meta,
+            meta,
             children,
         } = self;
+        let mut ev_notifier = meta.ev_notifier.clone();
         let runtime_children = meta.order.sort(Lifecycle::Termination, children);
 
-        let result = terminate_children(&mut meta.ev_notifier, runtime_children).await;
+        let (children_spec, result) = terminate_children(&mut ev_notifier, runtime_children).await;
+
+        let spec = Spec {
+            meta,
+            children: children_spec,
+        };
+
         match result {
-            Ok(children_spec) => {
-                meta.ev_notifier.supervisor_terminated(runtime_name).await;
-                Ok(Spec {
-                    meta,
-                    children: children_spec,
-                })
+            Ok(_) => {
+                ev_notifier.supervisor_terminated(runtime_name).await;
+                (spec, Ok(()))
             }
-            Err((children_spec, err0)) => {
+            Err(err0) => {
                 let err = Arc::new(err0);
-                meta.ev_notifier
+                ev_notifier
                     .supervisor_termination_failed(runtime_name, err.clone())
                     .await;
-                let spec = Spec {
-                    meta,
-                    children: children_spec,
-                };
-                Err((spec, err))
+                (spec, Err(err))
             }
         }
     }
@@ -408,10 +407,8 @@ mod tests {
             .map_err(|err| err.1)
             .expect("successful supervisor start");
 
-        let terminate_result = sup.terminate().await;
-        let _ = terminate_result
-            .map_err(|err| err.1)
-            .expect("successful supervisor termination");
+        let (_, terminate_result) = sup.terminate().await;
+        let _ = terminate_result.expect("successful supervisor termination");
 
         event_buffer
             .assert_exact(vec![
@@ -442,10 +439,8 @@ mod tests {
             .map_err(|err| err.1)
             .expect("successful supervisor start");
 
-        let terminate_result = sup.terminate().await;
-        let _spec = terminate_result
-            .map_err(|err| err.1)
-            .expect("successful supervisor termination");
+        let (_spec, terminate_result) = sup.terminate().await;
+        terminate_result.expect("successful supervisor termination");
 
         event_buffer
             .assert_exact(vec![
