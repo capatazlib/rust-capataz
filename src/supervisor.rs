@@ -315,8 +315,8 @@ impl Spec {
         .await;
 
         match result {
-            Err((children_specs, err0)) => {
-                let err = Arc::new(err0);
+            Err((children_specs, err)) => {
+                let err = Arc::new(err);
                 ev_notifier
                     .supervisor_start_failed(&sup_runtime_name, err.clone())
                     .await;
