@@ -243,6 +243,8 @@ impl Spec {
         }
     }
 
+    // TODO: once we start with the monitoring logic, change this method to
+    // run_supervisor
     async fn start_supervisor<'a>(
         self,
         parent_ctx: &context::Context,
@@ -263,6 +265,7 @@ impl Spec {
         )
         .await;
 
+        // TODO: monitoring should start here
         match result {
             Err((children_specs, err)) => {
                 let err = Arc::new(err);
@@ -291,6 +294,8 @@ impl Spec {
         parent_ctx: &context::Context,
     ) -> Result<Supervisor, (Spec, Arc<StartError>)> {
         let root_name = "";
+        // TODO: Create Supervisor record here, with JoinHandle that would stop
+        // execution of future run_supervisor
         self.start_supervisor(parent_ctx, root_name).await
     }
 }
