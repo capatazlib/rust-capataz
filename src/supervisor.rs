@@ -78,18 +78,13 @@ async fn terminate_prev_siblings<I: DoubleEndedIterator<Item = worker::Spec>>(
     pending_children_specs: I,
     started_children: Vec<Worker>,
 ) -> (Vec<worker::Spec>, StartError) {
-    let prev_sibling_termination_result =
+    let (prev_specs, sibling_termination_err) =
         terminate_children(ev_notifier, started_children.into_iter().rev()).await;
-
-    let (prev_specs, failing_sibling_termination_error) = match prev_sibling_termination_result {
-        (prev_specs, Err(sibling_err)) => (prev_specs, Some(sibling_err)),
-        (prev_specs, _) => (prev_specs, None),
-    };
 
     let start_err = StartError {
         failing_child_runtime_name: "".to_owned(),
         failing_child_error: failed_child_start_err,
-        failing_sibling_termination_error,
+        failing_sibling_termination_error: sibling_termination_err.err(),
     };
 
     // regenerate the original vector of worker specs so that the parent
