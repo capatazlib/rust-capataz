@@ -252,8 +252,8 @@ async fn terminate_children<'a>(
     for runtime_child in runtime_children {
         let child_runtime_name = runtime_child.runtime_name.to_owned();
         match runtime_child.terminate().await {
-            Err((failed_child_spec, termination_err0)) => {
-                let termination_err = Arc::new(termination_err0);
+            Err((failed_child_spec, termination_err)) => {
+                let termination_err = Arc::new(termination_err);
                 ev_notifier
                     .worker_termination_failed(child_runtime_name.clone(), termination_err.clone())
                     .await;
