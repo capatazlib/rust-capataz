@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::{mpsc, Mutex, MutexGuard};
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::{self, JoinHandle};
 
+use crate::supervisor;
 use crate::worker;
 
 /// Event represents all the different events that may happen on a running
@@ -11,9 +12,9 @@ use crate::worker;
 #[derive(Debug, Clone)]
 pub enum Event {
     SupervisorStarted(NodeData),
-    SupervisorStartFailed(NodeData, Arc<anyhow::Error>),
+    SupervisorStartFailed(NodeData, Arc<supervisor::StartError>),
     SupervisorTerminated(NodeData),
-    SupervisorTerminationFailed(NodeData, Arc<anyhow::Error>),
+    SupervisorTerminationFailed(NodeData, Arc<supervisor::TerminationError>),
     WorkerStarted(NodeData),
     WorkerStartFailed(NodeData, Arc<worker::StartError>),
     WorkerTerminated(NodeData),
@@ -72,7 +73,7 @@ impl EventNotifier {
     pub async fn supervisor_start_failed(
         &mut self,
         runtime_name: impl Into<String>,
-        err: Arc<anyhow::Error>,
+        err: Arc<supervisor::StartError>,
     ) {
         self.notify(Event::SupervisorStartFailed(
             NodeData {
@@ -93,7 +94,7 @@ impl EventNotifier {
     pub async fn supervisor_termination_failed(
         &mut self,
         runtime_name: impl Into<String>,
-        err: Arc<anyhow::Error>,
+        err: Arc<supervisor::TerminationError>,
     ) {
         self.notify(Event::SupervisorTerminationFailed(
             NodeData {
@@ -209,10 +210,11 @@ impl EventAssert {
 
 /// supervisor_started asserts an event that tells a supervisor with the given
 /// name started
-pub fn supervisor_started(input_name: &'static str) -> EventAssert {
+pub fn supervisor_started(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorStarted(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting SupervisorStarted with name {}; got {:?} instead",
                     input_name, ev
@@ -227,10 +229,11 @@ pub fn supervisor_started(input_name: &'static str) -> EventAssert {
 
 /// supervisor_terminated asserts an event that tells a supervisor with the given
 /// name was terminated
-pub fn supervisor_terminated(input_name: &'static str) -> EventAssert {
+pub fn supervisor_terminated(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorTerminated(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting SupervisorTerminated with name {}; got {:?} instead",
                     input_name, ev
@@ -248,10 +251,11 @@ pub fn supervisor_terminated(input_name: &'static str) -> EventAssert {
 
 /// worker_started asserts an event that tells a worker with the given name
 /// started
-pub fn worker_started(input_name: &'static str) -> EventAssert {
+pub fn worker_started(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerStarted(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting WorkerStarted with name {}; got {:?} instead",
                     input_name, ev
@@ -264,12 +268,30 @@ pub fn worker_started(input_name: &'static str) -> EventAssert {
     }))
 }
 
+pub fn worker_start_failed(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
+    EventAssert(Box::new(move |ev| match &ev {
+        Event::WorkerStartFailed(NodeData { runtime_name }, _) => {
+            if runtime_name != &*input_name {
+                Some(format!(
+                    "Expecting WorkerStartFailed with name {}; got {:?} instead",
+                    input_name, ev
+                ))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
+    }))
+}
+
 /// worker_terminated asserts an event that tells a worker with the given name
 /// was terminated
-pub fn worker_terminated(input_name: &'static str) -> EventAssert {
+pub fn worker_terminated(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
     EventAssert(Box::new(move |ev| match &ev {
         Event::WorkerTerminated(NodeData { runtime_name }) => {
-            if runtime_name != input_name {
+            if runtime_name != &*input_name {
                 Some(format!(
                     "Expecting WorkerTerminated with name {}; got {:?} instead",
                     input_name, ev
@@ -279,6 +301,26 @@ pub fn worker_terminated(input_name: &'static str) -> EventAssert {
             }
         }
         _ => Some(format!("Expecting WorkerTerminated; got {:?} instead", ev)),
+    }))
+}
+
+pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
+    let input_name = input_name0.to_owned();
+    EventAssert(Box::new(move |ev| match &ev {
+        Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
+            if runtime_name != &*input_name {
+                Some(format!(
+                    "Expecting WorkerTerminationFailed with name {}; got {:?} instead",
+                    input_name, ev
+                ))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!(
+            "Expecting WorkerTerminationFailed; got {:?} instead",
+            ev
+        )),
     }))
 }
 
@@ -293,7 +335,7 @@ async fn run_event_collector(events: Arc<Mutex<Vec<Event>>>, mut receiver: mpsc:
 
 /// testing_event_notifier returns an `EventNotifier` that sends its events
 /// to an EventBufferCollector.
-async fn testing_event_notifier() -> (EventNotifier, EventBufferCollector) {
+pub async fn testing_event_notifier() -> (EventNotifier, EventBufferCollector) {
     let (send_ev, rx_ev) = mpsc::channel(1);
     let notifier = EventNotifier::from_mpsc(send_ev);
     let buffer = EventBufferCollector::from_mpsc(rx_ev).await;

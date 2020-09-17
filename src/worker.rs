@@ -58,7 +58,7 @@ pub enum TerminationError {
 }
 
 impl TerminationError {
-    fn is_timeout_error(&self) -> bool {
+    pub fn is_timeout_error(&self) -> bool {
         match self {
             TerminationError::TimeoutError { .. } => true,
             _ => false,
@@ -108,7 +108,7 @@ pub enum StartError {
 }
 
 impl StartError {
-    fn is_timeout_error(&self) -> bool {
+    pub fn is_timeout_error(&self) -> bool {
         match self {
             StartError::TimeoutError { .. } => true,
             _ => false,
@@ -154,7 +154,8 @@ impl StartNotifier {
 }
 
 pub struct Spec {
-    name: String,
+    pub name: String,
+
     start_timeout: Duration,
     termination_timeout: TerminationTimeout,
     restart: Restart,
@@ -167,8 +168,9 @@ pub struct Spec {
 /// contains metadata and also offers an API to perform graceful and forceful
 /// termination
 pub struct Worker {
+    pub runtime_name: String,
+
     spec: Spec,
-    runtime_name: String,
     created_at: DateTime<Utc>,
     join_handle: JoinHandle<Result<anyhow::Result<()>, Aborted>>,
     termination_handle: AbortHandle,
@@ -405,7 +407,7 @@ impl Worker {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::time::Duration;
 
     use tokio::sync::mpsc;
@@ -414,14 +416,25 @@ mod tests {
     use crate::context::*;
     use crate::worker::{self, StartNotifier};
 
-    fn start_err_worker(name: &str, err_msg: &'static str) -> worker::Spec {
+    pub fn wait_done_worker(name: &str) -> worker::Spec {
+        worker::Spec::new(name, move |ctx: Context| async move {
+            ctx.done.await;
+            Ok(())
+        })
+    }
+
+    pub fn start_err_worker(name: &str, err_msg: &'static str) -> worker::Spec {
         worker::Spec::new_with_start(name, move |_: Context, start: StartNotifier| async move {
             start.failed(anyhow::Error::msg(err_msg.to_owned()));
             Err(anyhow::Error::msg("should not see this"))
         })
     }
 
-    fn start_timeout_worker(name: &str, start_timeout: Duration, delay: Duration) -> worker::Spec {
+    pub fn start_timeout_worker(
+        name: &str,
+        start_timeout: Duration,
+        delay: Duration,
+    ) -> worker::Spec {
         let spec = worker::Spec::new_with_start(
             name,
             move |_: Context, start: StartNotifier| async move {
@@ -449,7 +462,7 @@ mod tests {
         })
     }
 
-    fn termination_failed_worker(name: &str) -> worker::Spec {
+    pub fn termination_failed_worker(name: &str) -> worker::Spec {
         worker::Spec::new(name, move |ctx: Context| async move {
             ctx.done.await;
             Err(anyhow::Error::msg("termination_failed_worker"))
