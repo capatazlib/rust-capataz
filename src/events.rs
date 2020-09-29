@@ -180,7 +180,7 @@ impl EventBufferCollector {
         let events = self.get_events().await;
         assert_eq!(events.len(), asserts.len(), "{:?}", events);
         for (ev, assert) in events.into_iter().zip(asserts.into_iter()) {
-            assert.check(ev)
+            assert.check(&ev)
         }
     }
 
@@ -194,13 +194,13 @@ impl EventBufferCollector {
 
 /// EventAssert is a well-defined function that asserts properties from an Event
 /// emitted by a running supervision tree.
-pub struct EventAssert(Box<dyn Fn(Event) -> Option<String>>);
+pub struct EventAssert(Box<dyn Fn(&Event) -> Option<String>>);
 
 impl EventAssert {
-    fn call(&self, ev: Event) -> Option<String> {
+    fn call(&self, ev: &Event) -> Option<String> {
         (*self.0)(ev)
     }
-    pub fn check(&self, ev: Event) {
+    pub fn check(&self, ev: &Event) {
         let result = self.call(ev);
         if let Some(err_msg) = result {
             panic!("EventAssert failed: {}", err_msg);
