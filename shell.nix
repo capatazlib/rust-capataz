@@ -1,11 +1,14 @@
-{pkgs ? import ./nix/packages.nix { nightly = false; }}:
+let
+  pinnedPkgs = import ./nix/packages.nix { nightly = false; };
+in
+
+{ pkgs ? pinnedPkgs }:
 
 pkgs.mkShell {
   buildInputs = with pkgs; [
     # general purpose deps
-    cacert
     figlet
-    stdenv
+    cacert
 
     # rust related deps
     crate2nix
