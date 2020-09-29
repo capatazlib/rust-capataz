@@ -210,8 +210,11 @@ impl EventAssert {
 
 /// supervisor_started asserts an event that tells a supervisor with the given
 /// name started
-pub fn supervisor_started(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
+pub fn supervisor_started<S>(input_name0: S) -> EventAssert
+where
+    S: Into<String>,
+{
+    let input_name = input_name0.into();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorStarted(NodeData { runtime_name }) => {
             if runtime_name != &*input_name {
@@ -229,8 +232,11 @@ pub fn supervisor_started(input_name0: &str) -> EventAssert {
 
 /// supervisor_terminated asserts an event that tells a supervisor with the given
 /// name was terminated
-pub fn supervisor_terminated(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
+pub fn supervisor_terminated<S>(input_name0: S) -> EventAssert
+where
+    S: Into<String> + Clone,
+{
+    let input_name = input_name0.into();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorTerminated(NodeData { runtime_name }) => {
             if runtime_name != &*input_name {
