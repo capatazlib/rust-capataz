@@ -255,6 +255,31 @@ where
     }))
 }
 
+/// supervisor_terminated asserts an event that tells a supervisor with the given
+/// name was terminated
+pub fn supervisor_start_failed<S>(input_name0: S) -> EventAssert
+where
+    S: Into<String> + Clone,
+{
+    let input_name = input_name0.into();
+    EventAssert(Box::new(move |ev| match &ev {
+        Event::SupervisorStartFailed(NodeData { runtime_name }, _) => {
+            if runtime_name != &*input_name {
+                Some(format!(
+                    "Expecting SupervisorStartFailed with name {}; got {:?} instead",
+                    input_name, ev
+                ))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!(
+            "Expecting SupervisorStartFailed; got {:?} instead",
+            ev
+        )),
+    }))
+}
+
 /// worker_started asserts an event that tells a worker with the given name
 /// started
 pub fn worker_started(input_name0: &str) -> EventAssert {
