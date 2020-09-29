@@ -1,8 +1,10 @@
 use std::sync::Arc;
+use std::time;
 
 use futures::future::{BoxFuture, Future, FutureExt};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::{self, JoinHandle};
+use tokio::time::timeout;
 
 use crate::supervisor;
 use crate::worker;
@@ -155,16 +157,23 @@ impl EventNotifier {
 /// events that have happened.
 pub struct EventBufferCollector {
     events: Arc<Mutex<Vec<Event>>>,
+    on_push: mpsc::UnboundedReceiver<()>,
     join_handle: JoinHandle<()>,
+    current_index: usize,
 }
 
 impl EventBufferCollector {
     pub async fn from_mpsc(receiver: mpsc::Receiver<Event>) -> EventBufferCollector {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let join_handle = task::spawn(run_event_collector(events.clone(), receiver));
+        // We use unbounded_channel as this is intended to be used for
+        // assertions on test-suites
+        let (notify_push, on_push) = mpsc::unbounded_channel();
+        let join_handle = task::spawn(run_event_collector(events.clone(), notify_push, receiver));
         EventBufferCollector {
             events,
             join_handle,
+            on_push,
+            current_index: 0,
         }
     }
 
@@ -184,10 +193,34 @@ impl EventBufferCollector {
         }
     }
 
-    // TODO: A function that will block current thread until an event assert is
-    // successful
-    //
-    // pub async fn wait_till(&self, assert: EventAssert, timeout: time::Duration)
+    /// wait_till iterates over the events that have happened and will happen to
+    /// check the given EventAssert was matched.
+    pub async fn wait_till(
+        &mut self,
+        assert: EventAssert,
+        wait_duration: time::Duration,
+    ) -> Result<(), String> {
+        loop {
+            let events: Vec<Event> = self.get_events().await;
+            for (i, ev) in events[self.current_index..].iter().enumerate() {
+                self.current_index = i;
+                // if we did not get an error message, we matched, and we need
+                // to stop
+                if let None = assert.call(ev) {
+                    return Ok(());
+                }
+            }
+
+            // unlock the events
+            drop(events);
+
+            // we finished the loop, we have to wait until the next push and try
+            // again. if we wait too long, fail with a timeout error
+            if let Err(_) = timeout(wait_duration, self.on_push.recv()).await {
+                return Err("Expected assertion after timeout, did not happen".to_owned());
+            }
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -357,10 +390,21 @@ pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
 
 /// run_event_collector is an internal function that receives supervision events
 /// from a channel and stores them on a thread-safe buffer.
-async fn run_event_collector(events: Arc<Mutex<Vec<Event>>>, mut receiver: mpsc::Receiver<Event>) {
+async fn run_event_collector(
+    events: Arc<Mutex<Vec<Event>>>,
+    notify_push: mpsc::UnboundedSender<()>,
+    mut receiver: mpsc::Receiver<Event>,
+) {
     while let Some(ev) = receiver.recv().await {
         let mut ev_vec = events.lock().await;
         ev_vec.push(ev);
+
+        // unlock the event buffer
+        drop(ev_vec);
+
+        // IMPORTANT: We do not ever want to .await for the send, as we do not
+        // always read from the on_push channel
+        let _ = notify_push.send(());
     }
 }
 
