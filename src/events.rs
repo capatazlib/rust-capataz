@@ -4,7 +4,7 @@ use std::time;
 use futures::future::{BoxFuture, Future, FutureExt};
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task::{self, JoinHandle};
-use tokio::time::timeout;
+use tokio::time::{timeout_at, Instant};
 
 use crate::supervisor;
 use crate::worker;
@@ -218,7 +218,7 @@ impl EventBufferCollector {
 
             // we finished the loop, we have to wait until the next push and try
             // again. if we wait too long, fail with a timeout error
-            if let Err(_) = timeout(wait_duration, self.on_push.recv()).await {
+            if let Err(_) = timeout_at(Instant::now() + wait_duration, self.on_push.recv()).await {
                 return Err("Expected assertion after timeout, did not happen".to_owned());
             }
         }
