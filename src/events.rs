@@ -1,8 +1,10 @@
 use std::sync::Arc;
+use std::time;
 
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task::{self, JoinHandle};
+use tokio::time::{timeout_at, Instant};
 
 use crate::supervisor;
 use crate::worker;
@@ -155,16 +157,25 @@ impl EventNotifier {
 /// events that have happened.
 pub struct EventBufferCollector {
     events: Arc<Mutex<Vec<Event>>>,
+    on_push: broadcast::Receiver<()>,
     join_handle: JoinHandle<()>,
+    current_index: usize,
 }
 
 impl EventBufferCollector {
     pub async fn from_mpsc(receiver: mpsc::Receiver<Event>) -> EventBufferCollector {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let join_handle = task::spawn(run_event_collector(events.clone(), receiver));
+        // We use unbounded_channel as this is intended to be used for
+        // assertions on test-suites
+        let (notify_push, on_push) = broadcast::channel(10);
+        // why 10? is an arbitrary number, we are not expecting this to collect
+        // to many messages before they get read by consumers
+        let join_handle = task::spawn(run_event_collector(events.clone(), notify_push, receiver));
         EventBufferCollector {
             events,
             join_handle,
+            on_push,
+            current_index: 0,
         }
     }
 
@@ -180,27 +191,51 @@ impl EventBufferCollector {
         let events = self.get_events().await;
         assert_eq!(events.len(), asserts.len(), "{:?}", events);
         for (ev, assert) in events.into_iter().zip(asserts.into_iter()) {
-            assert.check(ev)
+            assert.check(&ev)
         }
     }
 
-    // TODO: A function that will block current thread until an event assert is
-    // successful
-    //
-    // pub async fn wait_till(&self, assert: EventAssert, timeout: time::Duration)
+    /// wait_till iterates over the events that have happened and will happen to
+    /// check the given EventAssert was matched.
+    pub async fn wait_till(
+        &mut self,
+        assert: EventAssert,
+        wait_duration: time::Duration,
+    ) -> Result<(), String> {
+        loop {
+            let events: Vec<Event> = self.get_events().await;
+            for (i, ev) in events[self.current_index..].iter().enumerate() {
+                self.current_index = i;
+                // if we did not get an error message, we matched, and we need
+                // to stop
+                if let None = assert.call(ev) {
+                    return Ok(());
+                }
+            }
+
+            // unlock the events
+            drop(events);
+
+            // we finished the loop, we have to wait until the next push and try
+            // again. if we wait too long, fail with a timeout error
+            if let Err(_) = timeout_at(Instant::now() + wait_duration, self.on_push.recv()).await {
+                return Err("Expected assertion after timeout, did not happen".to_owned());
+            }
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
 /// EventAssert is a well-defined function that asserts properties from an Event
 /// emitted by a running supervision tree.
-pub struct EventAssert(Box<dyn Fn(Event) -> Option<String>>);
+pub struct EventAssert(Box<dyn Fn(&Event) -> Option<String>>);
 
 impl EventAssert {
-    fn call(&self, ev: Event) -> Option<String> {
+    fn call(&self, ev: &Event) -> Option<String> {
         (*self.0)(ev)
     }
-    pub fn check(&self, ev: Event) {
+    pub fn check(&self, ev: &Event) {
         let result = self.call(ev);
         if let Some(err_msg) = result {
             panic!("EventAssert failed: {}", err_msg);
@@ -210,8 +245,11 @@ impl EventAssert {
 
 /// supervisor_started asserts an event that tells a supervisor with the given
 /// name started
-pub fn supervisor_started(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
+pub fn supervisor_started<S>(input_name0: S) -> EventAssert
+where
+    S: Into<String>,
+{
+    let input_name = input_name0.into();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorStarted(NodeData { runtime_name }) => {
             if runtime_name != &*input_name {
@@ -229,8 +267,11 @@ pub fn supervisor_started(input_name0: &str) -> EventAssert {
 
 /// supervisor_terminated asserts an event that tells a supervisor with the given
 /// name was terminated
-pub fn supervisor_terminated(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
+pub fn supervisor_terminated<S>(input_name0: S) -> EventAssert
+where
+    S: Into<String> + Clone,
+{
+    let input_name = input_name0.into();
     EventAssert(Box::new(move |ev| match &ev {
         Event::SupervisorTerminated(NodeData { runtime_name }) => {
             if runtime_name != &*input_name {
@@ -244,6 +285,31 @@ pub fn supervisor_terminated(input_name0: &str) -> EventAssert {
         }
         _ => Some(format!(
             "Expecting SupervisorTerminated; got {:?} instead",
+            ev
+        )),
+    }))
+}
+
+/// supervisor_terminated asserts an event that tells a supervisor with the given
+/// name was terminated
+pub fn supervisor_start_failed<S>(input_name0: S) -> EventAssert
+where
+    S: Into<String> + Clone,
+{
+    let input_name = input_name0.into();
+    EventAssert(Box::new(move |ev| match &ev {
+        Event::SupervisorStartFailed(NodeData { runtime_name }, _) => {
+            if runtime_name != &*input_name {
+                Some(format!(
+                    "Expecting SupervisorStartFailed with name {}; got {:?} instead",
+                    input_name, ev
+                ))
+            } else {
+                None
+            }
+        }
+        _ => Some(format!(
+            "Expecting SupervisorStartFailed; got {:?} instead",
             ev
         )),
     }))
@@ -326,10 +392,21 @@ pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
 
 /// run_event_collector is an internal function that receives supervision events
 /// from a channel and stores them on a thread-safe buffer.
-async fn run_event_collector(events: Arc<Mutex<Vec<Event>>>, mut receiver: mpsc::Receiver<Event>) {
+async fn run_event_collector(
+    events: Arc<Mutex<Vec<Event>>>,
+    notify_push: broadcast::Sender<()>,
+    mut receiver: mpsc::Receiver<Event>,
+) {
     while let Some(ev) = receiver.recv().await {
         let mut ev_vec = events.lock().await;
         ev_vec.push(ev);
+
+        // unlock the event buffer
+        drop(ev_vec);
+
+        // IMPORTANT: We do not ever want to .await for the send, as we do not
+        // always read from the on_push channel
+        let _ = notify_push.send(());
     }
 }
 
