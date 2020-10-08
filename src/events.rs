@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time;
 
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::task::{self, JoinHandle};
 use tokio::time::timeout;
 
@@ -157,7 +157,7 @@ impl EventNotifier {
 /// events that have happened.
 pub struct EventBufferCollector {
     events: Arc<Mutex<Vec<Event>>>,
-    on_push: mpsc::UnboundedReceiver<()>,
+    on_push: broadcast::Receiver<()>,
     join_handle: JoinHandle<()>,
     current_index: usize,
 }
@@ -167,7 +167,9 @@ impl EventBufferCollector {
         let events = Arc::new(Mutex::new(Vec::new()));
         // We use unbounded_channel as this is intended to be used for
         // assertions on test-suites
-        let (notify_push, on_push) = mpsc::unbounded_channel();
+        let (notify_push, on_push) = broadcast::channel(10);
+        // why 10? is an arbitrary number, we are not expecting this to collect
+        // to many messages before they get read by consumers
         let join_handle = task::spawn(run_event_collector(events.clone(), notify_push, receiver));
         EventBufferCollector {
             events,
@@ -392,7 +394,7 @@ pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
 /// from a channel and stores them on a thread-safe buffer.
 async fn run_event_collector(
     events: Arc<Mutex<Vec<Event>>>,
-    notify_push: mpsc::UnboundedSender<()>,
+    notify_push: broadcast::Sender<()>,
     mut receiver: mpsc::Receiver<Event>,
 ) {
     while let Some(ev) = receiver.recv().await {
