@@ -71,16 +71,39 @@ pub struct Spec {
     pub meta: SpecMeta,
 }
 
-type SupervisorResult = Result<
-    (Spec, Result<(), Arc<TerminationError>>), /* result when supervisor starts without errors */
-    Option<(Spec, Arc<StartError>)>,           /* result when the supervisor fails to start */
->;
+// type SupervisorResult = Result<
+//     (Spec, Result<(), Arc<TerminationError>>), /* result when supervisor starts without errors */
+//     Option<(Spec, Arc<StartError>)>,           /* result when the supervisor fails to start */
+// >;
+
+/// A value that gets returned when running a Supervisor record
+enum SupervisorResult {
+    // gets returned when the supervisor failed to start
+    ErrStart {
+        spec: Spec,
+        err: Arc<StartError>,
+    },
+    // gets returned when the supervisor failed to start, and the
+    // error is sent to a spawner thread via a start_notifier
+    ErrStartHandled,
+    // gets returned when a supervisor stopped running because of a termination
+    // that did not fail
+    OkTermination {
+        spec: Spec,
+    },
+    // gets returned when a supervisor stopped running because of a termination
+    // but it did find errors in the process
+    ErrTermination {
+        spec: Spec,
+        err: Arc<TerminationError>,
+    },
+}
 
 pub struct Supervisor {
     pub runtime_name: String,
     pub meta: SpecMeta,
-    pub join_handle: JoinHandle<SupervisorResult>,
-    pub termination_handle: AbortHandle,
+    join_handle: JoinHandle<SupervisorResult>,
+    termination_handle: AbortHandle,
 }
 
 // terminate_prev_siblings gets called when a child in a supervision tree fails
@@ -245,7 +268,7 @@ async fn terminate_supervisor_monitor(
     meta: SpecMeta,
     sup_runtime_name: String,
     sup_runtime_children: Vec<Worker>,
-) -> (Spec, Result<(), Arc<TerminationError>>) {
+) -> SupervisorResult {
     // initialize event notifier in this function
     let mut ev_notifier = meta.ev_notifier.clone();
 
@@ -265,20 +288,20 @@ async fn terminate_supervisor_monitor(
     match err {
         Ok(()) => {
             ev_notifier.supervisor_terminated(sup_runtime_name).await;
-            return (spec, Ok(()));
+            SupervisorResult::OkTermination { spec }
         }
-        Err(termination_err0) => {
-            let termination_err = Arc::new(termination_err0);
+        Err(termination_err) => {
+            let err = Arc::new(termination_err);
             ev_notifier
-                .supervisor_termination_failed(sup_runtime_name, termination_err.clone())
+                .supervisor_termination_failed(sup_runtime_name, err.clone())
                 .await;
-            return (spec, Err(termination_err));
+            SupervisorResult::ErrTermination { spec, err }
         }
     }
 }
 
-/// run_supervisor_monitor executes the monitoring logic of the supervisor. It
-/// expectes a start_notifier to signal the supervisor when it has started.
+/// Executes the monitoring logic of the supervisor. It expectes a
+/// start_notifier to signal the supervisor when it has started.
 ///
 /// ### Calling this function on current thread (`start_notifier` is None)
 ///
@@ -327,20 +350,19 @@ async fn run_supervisor_monitor(
                 meta,
                 children: spec_children,
             };
-            let start_result = (spec, err);
             match mstart_notifier {
                 Some(start_notifier) => {
                     // if we call this function inside a `task::spawn`, the
                     // spawner should receive back the spec and error
-                    start_notifier.failed(start_result);
+                    start_notifier.failed((spec, err));
                     // this implementation was forced by the compiler, start_result cannot
                     // belong to both a spawner and a caller, rust compile, thank you <3
-                    return Err(None);
+                    return SupervisorResult::ErrStartHandled;
                 }
                 None => {
                     // if we call this function on the same thread, the function
                     // caller should receive back the spec and error
-                    return Err(Some(start_result));
+                    return SupervisorResult::ErrStart { spec, err };
                 }
             }
         }
@@ -361,7 +383,7 @@ async fn run_supervisor_monitor(
                     // got called; signaling a shutdown of the whole supervision
                     // tree.
                     _ = ctx.done.clone() => {
-                        let termination_result =
+                        let supervisor_result =
                             terminate_supervisor_monitor(
                                 meta,
                                 sup_runtime_name,
@@ -371,7 +393,7 @@ async fn run_supervisor_monitor(
                         // Ok means we did not fail to start, but
                         // termination_result contains a Result that indicates
                         // if we failed to terminate or not
-                        return Ok(termination_result);
+                        return supervisor_result;
                     },
                     // TODO: monotiring children
                     // ch_notification = notify_recv.receive() => {
@@ -521,10 +543,13 @@ impl Supervisor {
                 eprintln!("{:?}", join_handle_err);
                 panic!("supervisor monitor loop had a join_handle error; invalid implementation")
             }
-            // Ok(Err(_)) means we got an start error, this has been dealt
+            // ErrStart means we got an start error, this has been dealt
             // with, and so it must never happen
-            Ok(Err(_)) => unreachable!(),
-            Ok(Ok(termination_result)) => termination_result,
+            Ok(SupervisorResult::ErrStartHandled) => unreachable!(),
+            Ok(SupervisorResult::ErrStart { .. }) => unreachable!(),
+
+            Ok(SupervisorResult::OkTermination { spec }) => (spec, Ok(())),
+            Ok(SupervisorResult::ErrTermination { spec, err }) => (spec, Err(err)),
         }
     }
 }
