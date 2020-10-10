@@ -288,7 +288,7 @@ async fn terminate_supervisor_monitor(
 ///
 /// ### Calling this function on new spawned thread (`start_notifier` given)
 ///
-/// When this function gets executed on a spawned task, is because we are the
+/// When this function gets executed on a spawned task, it is because we are the
 /// root supervisor. In this scenario, we want to signal the supervisor that we
 /// got started without having to `.await` on the join_handle result from the
 /// spawned task.
