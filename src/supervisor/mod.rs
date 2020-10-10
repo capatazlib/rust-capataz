@@ -71,11 +71,6 @@ pub struct Spec {
     pub meta: SpecMeta,
 }
 
-// type SupervisorResult = Result<
-//     (Spec, Result<(), Arc<TerminationError>>), /* result when supervisor starts without errors */
-//     Option<(Spec, Arc<StartError>)>,           /* result when the supervisor fails to start */
-// >;
-
 /// A value that gets returned when running a Supervisor record
 enum SupervisorResult {
     // gets returned when the supervisor failed to start
