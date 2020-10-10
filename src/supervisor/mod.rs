@@ -405,6 +405,23 @@ impl Spec {
         }
     }
 
+    /// run executes the supervisor monitoring logic on the existing task. This function:
+    ///
+    /// 1. spawns a new routine for the supervision loop
+    ///
+    /// 2. spawns each node routine in the correct order
+    ///
+    /// 3. stops all the spawned nodes in the correct order once it gets a
+    /// stop signal
+    ///
+    /// 4. it monitors and reacts to errors reported by the supervised nodes
+    ///
+    async fn run(self, parent_ctx: context::Context, parent_name: &str) -> SupervisorResult {
+        let Spec { meta, children } = self;
+        let sup_runtime_name = format!("{}/{}", parent_name, meta.name);
+        run_supervisor_monitor(parent_ctx.clone(), meta, children, None, sup_runtime_name).await
+    }
+
     /// start is future that contains the main logic of a Supervisor. This
     /// function:
     ///
