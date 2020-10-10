@@ -263,7 +263,7 @@ async fn terminate_supervisor_monitor(
     };
 
     match err {
-        Ok(_) => {
+        Ok(()) => {
             ev_notifier.supervisor_terminated(sup_runtime_name).await;
             return (spec, Ok(()));
         }
