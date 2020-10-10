@@ -280,13 +280,13 @@ async fn terminate_supervisor_monitor(
 /// run_supervisor_monitor executes the monitoring logic of the supervisor. It
 /// expectes a start_notifier to signal the supervisor when it has started.
 ///
-/// ### Calling this function on current thread (`run_sync` is true)
+/// ### Calling this function on current thread (`start_notifier` is None)
 ///
 /// When this function gets called in sync fashion, is because we are running in
 /// a subtree. In this scenario, we want to return the start failures to signal a
 /// failure to our parent supervisor.
 ///
-/// ### Calling this function on new spawned thread (`run_sync` is false)
+/// ### Calling this function on new spawned thread (`start_notifier` given)
 ///
 /// When this function gets executed on a spawned task, is because we are the
 /// root supervisor. In this scenario, we want to signal the supervisor that we
@@ -294,11 +294,10 @@ async fn terminate_supervisor_monitor(
 /// spawned task.
 ///
 async fn run_supervisor_monitor(
-    run_sync: bool,
     parent_ctx: context::Context,
     meta: SpecMeta,
     children_spec: Vec<worker::Spec>,
-    start_notifier: SpawnedNotifier<(), (Spec, Arc<StartError>)>,
+    mstart_notifier: Option<SpawnedNotifier<(), (Spec, Arc<StartError>)>>,
     sup_runtime_name: String,
 ) -> SupervisorResult {
     let (ctx, _terminate_supervisor) = Context::with_cancel(&parent_ctx);
@@ -329,17 +328,20 @@ async fn run_supervisor_monitor(
                 children: spec_children,
             };
             let start_result = (spec, err);
-            if run_sync {
-                // if we call this function with run_sync true, the function
-                // caller should receive back the spec and error
-                return Err(Some(start_result));
-            } else {
-                // otherwise, if we call this function inside a `task::spawn`,
-                // the spanwer should receive back the spec and error
-                start_notifier.failed(start_result);
-                // this implementation was forced by the compiler, start_result cannot
-                // belong to both a spawner and a caller, rust compile, thank you <3
-                return Err(None);
+            match mstart_notifier {
+                Some(start_notifier) => {
+                    // if we call this function inside a `task::spawn`, the
+                    // spawner should receive back the spec and error
+                    start_notifier.failed(start_result);
+                    // this implementation was forced by the compiler, start_result cannot
+                    // belong to both a spawner and a caller, rust compile, thank you <3
+                    return Err(None);
+                }
+                None => {
+                    // if we call this function on the same thread, the function
+                    // caller should receive back the spec and error
+                    return Err(Some(start_result));
+                }
             }
         }
         // notify supervisor of start success
@@ -347,7 +349,9 @@ async fn run_supervisor_monitor(
             // here we signal that the start was successful, which will unblock
             // the bootstrap logic to spawn the next sibling
             ev_notifier.supervisor_started(&sup_runtime_name).await;
-            start_notifier.success(());
+            if let Some(start_notifier) = mstart_notifier {
+                start_notifier.success(());
+            }
 
             // after startup, we initialize the monitor loop where we listen
             // to children errors or public API calls
@@ -448,11 +452,10 @@ impl Spec {
         let sup_runtime_name1 = sup_runtime_name.clone();
 
         let join_handle = task::spawn(run_supervisor_monitor(
-            false, /* sync */
             ctx,
             meta,
             spec_children,
-            start_notifier,
+            Some(start_notifier),
             sup_runtime_name1,
         ));
 
