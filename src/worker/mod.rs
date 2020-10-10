@@ -162,9 +162,7 @@ pub struct Spec {
     restart: Restart,
     shutdown: Shutdown,
     routine: Box<
-        dyn (FnMut(Context, StartNotifier) -> BoxFuture<'static, Result<(), anyhow::Error>>)
-            + Send
-            + Sync,
+        dyn (FnMut(Context, StartNotifier) -> BoxFuture<'static, Result<(), anyhow::Error>>) + Send,
     >,
 }
 
@@ -202,7 +200,7 @@ impl Spec {
     ///
     pub fn new<F, O>(name: &str, mut routine0: F) -> Self
     where
-        F: (FnMut(Context) -> O) + Send + Sync + 'static,
+        F: (FnMut(Context) -> O) + Send + 'static,
         O: Future<Output = anyhow::Result<()>> + FutureExt + Send + Sized + 'static,
     {
         let routine1 = move |ctx: Context, on_start: StartNotifier| {
@@ -243,7 +241,7 @@ impl Spec {
     ///
     pub fn new_with_start<F, O>(name: &str, mut routine0: F) -> Self
     where
-        F: (FnMut(Context, StartNotifier) -> O) + Send + Sync + 'static,
+        F: (FnMut(Context, StartNotifier) -> O) + Send + 'static,
         O: Future<Output = anyhow::Result<()>> + FutureExt + Send + Sized + 'static,
     {
         let routine1 = move |ctx: Context, on_start: StartNotifier| routine0(ctx, on_start).boxed();
