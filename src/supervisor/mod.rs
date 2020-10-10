@@ -389,11 +389,11 @@ async fn run_supervisor_monitor(
 
 impl Spec {
     pub fn new(
-        name0: impl Into<String>,
+        name: impl Into<String>,
         children: Vec<worker::Spec>,
         ev_notifier: EventNotifier,
     ) -> Spec {
-        let name = name0.into();
+        let name = name.into();
         Spec {
             meta: SpecMeta {
                 ev_notifier,
@@ -479,7 +479,7 @@ impl Spec {
         // We wait for the supervisor to get started, and from there we return a
         // Supervisor record to the client, which can terminate the supervisor,
         // or wait for it to finish
-        return match started_recv.await {
+        match started_recv.await {
             // there is no way the monitor loop is going to drop the start
             // notifier before exiting, if we reach this branch, is an
             // implementation error
@@ -494,7 +494,7 @@ impl Spec {
                     termination_handle,
                 })
             }
-        };
+        }
     }
 }
 

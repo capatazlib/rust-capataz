@@ -401,7 +401,7 @@ async fn run_event_collector(
 ) {
     while let Some(ev) = receiver.recv().await {
         // IMPORTANT: DO NOT REMOVE DEBUG LINE COMMENT BELLOW
-        println!("{:?}", ev);
+        // println!("{:?}", ev);
 
         let mut ev_vec = events.lock().await;
         ev_vec.push(ev);

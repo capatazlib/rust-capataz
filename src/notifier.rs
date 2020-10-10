@@ -11,7 +11,7 @@ impl<T, E> StartNotifier<T, E> {
         E: Send + 'static,
     {
         StartNotifier(Box::new(move |err| {
-            let _ = sender.send(err);
+            sender.send(err).ok();
         }))
     }
 
