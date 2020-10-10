@@ -543,11 +543,14 @@ impl Supervisor {
                 eprintln!("{:?}", join_handle_err);
                 panic!("supervisor monitor loop had a join_handle error; invalid implementation")
             }
+
             // ErrStart means we got an start error, this has been dealt
             // with, and so it must never happen
             Ok(SupervisorResult::ErrStartHandled) => unreachable!(),
             Ok(SupervisorResult::ErrStart { .. }) => unreachable!(),
 
+            // we perform a transformation to more generic types so that clients don't
+            // get coupled with out enums
             Ok(SupervisorResult::OkTermination { spec }) => (spec, Ok(())),
             Ok(SupervisorResult::ErrTermination { spec, err }) => (spec, Err(err)),
         }
