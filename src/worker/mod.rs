@@ -135,13 +135,13 @@ impl StartError {
 /// StartNotifier offers a convenient way to notify a worker spawner (a
 /// Supervisor in the general case) that the worker got started or that it
 /// failed to start.
-pub struct StartNotifier(notifier::SpawnedNotifier<(), StartError>);
+pub struct StartNotifier(notifier::StartNotifier<(), StartError>);
 
 // We wrap the internal SpawnNotifier to offer a better API experience on the
 // Worker declration for API clients
 impl StartNotifier {
     fn from_oneshot(sender: oneshot::Sender<Result<(), StartError>>) -> Self {
-        let notifier = notifier::SpawnedNotifier::from_oneshot(sender);
+        let notifier = notifier::StartNotifier::from_oneshot(sender);
         StartNotifier(notifier)
     }
 

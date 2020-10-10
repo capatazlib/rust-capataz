@@ -11,7 +11,7 @@ use tokio::task::{self, JoinHandle};
 
 use crate::context::{self, Context};
 use crate::events::EventNotifier;
-use crate::notifier::SpawnedNotifier;
+use crate::notifier::StartNotifier;
 use crate::worker::{self, Worker};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -297,7 +297,7 @@ async fn run_supervisor_monitor(
     parent_ctx: context::Context,
     meta: SpecMeta,
     children_spec: Vec<worker::Spec>,
-    mstart_notifier: Option<SpawnedNotifier<(), (Spec, Arc<StartError>)>>,
+    mstart_notifier: Option<StartNotifier<(), (Spec, Arc<StartError>)>>,
     sup_runtime_name: String,
 ) -> SupervisorResult {
     let (ctx, _terminate_supervisor) = Context::with_cancel(&parent_ctx);
@@ -460,7 +460,7 @@ impl Spec {
 
         // started is used when waiting for the worker to signal it has started
         let (started_send, started_recv) = oneshot::channel();
-        let start_notifier = SpawnedNotifier::from_oneshot(started_send);
+        let start_notifier = StartNotifier::from_oneshot(started_send);
 
         let spec_children = self.children;
 

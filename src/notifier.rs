@@ -1,16 +1,16 @@
 use tokio::sync::oneshot;
 
-/// SpawnedNotifier offers a convenient way to notify a supervising task that this
+/// StartNotifier offers a convenient way to notify a supervising task that this
 /// task got started or that it failed to start.
-pub struct SpawnedNotifier<T, E>(Box<dyn FnOnce(Result<T, E>) + Send>);
+pub struct StartNotifier<T, E>(Box<dyn FnOnce(Result<T, E>) + Send>);
 
-impl<T, E> SpawnedNotifier<T, E> {
+impl<T, E> StartNotifier<T, E> {
     pub fn from_oneshot(sender: oneshot::Sender<Result<T, E>>) -> Self
     where
         T: Send + 'static,
         E: Send + 'static,
     {
-        SpawnedNotifier(Box::new(move |err| {
+        StartNotifier(Box::new(move |err| {
             let _ = sender.send(err);
         }))
     }
