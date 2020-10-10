@@ -5,6 +5,7 @@ extern crate lazy_static;
 #[allow(clippy::new_without_default)]
 mod context;
 mod events;
+mod notifier;
 mod supervisor;
 mod worker;
 

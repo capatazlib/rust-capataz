@@ -29,7 +29,7 @@ async fn start_stop_supervisor(
     let ctx = Context::new();
     let start_result = spec.start(&ctx).await;
     let sup = start_result
-        .map_err(|err| err.1)
+        .map_err(|err| err.1.clone())
         .expect("successful supervisor start");
 
     event_buffer
@@ -69,7 +69,7 @@ async fn err_start_supervisor(
     let start_result = spec.start(&ctx).await;
     let start_err = start_result
         .map(|_| ())
-        .map_err(|err| err.1)
+        .map_err(|err| err.1.clone())
         .expect_err("supervisor start must fail");
 
     assert!(start_err.failing_child_error.is_worker_init_error());
@@ -110,7 +110,7 @@ async fn start_timeout_supervisor(
     let start_result = start_fut.await;
     let start_err = start_result
         .map(|_| ())
-        .map_err(|err| err.1)
+        .map_err(|err| err.1.clone())
         .expect_err("supervisor start must fail");
 
     assert!(start_err.failing_child_error.is_timeout_error());
