@@ -103,7 +103,7 @@ pub struct Supervisor {
 
 // terminate_prev_siblings gets called when a child in a supervision tree fails
 // to start, and all it's previous siblings need to get terminated.
-async fn terminate_prev_siblings<I: DoubleEndedIterator<Item = worker::Spec> + Send>(
+async fn terminate_prev_siblings<I: DoubleEndedIterator<Item = worker::Spec>>(
     ev_notifier: &mut EventNotifier,
     order: Order,
     failed_child_spec: worker::Spec,
