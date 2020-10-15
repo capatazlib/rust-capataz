@@ -31,7 +31,7 @@ pub struct NodeData {
 
 /// NotifyFn is used by the supervision API to send events to an interested
 /// listener.
-type NotifyFn = Box<dyn Fn(Event) -> BoxFuture<'static, ()>>;
+type NotifyFn = Box<dyn (Fn(Event) -> BoxFuture<'static, ()>) + Send + Sync>;
 
 /// EventNotifier is used by the internal supervision API to send events about a
 /// running supervision tree
@@ -41,7 +41,7 @@ pub struct EventNotifier(Arc<NotifyFn>);
 impl EventNotifier {
     pub fn new<F, O>(notify0: F) -> Self
     where
-        F: Fn(Event) -> O + 'static,
+        F: (Fn(Event) -> O) + Send + Sync + 'static,
         O: Future<Output = ()> + FutureExt + Send + 'static,
     {
         let notify = move |ev| {
@@ -219,7 +219,9 @@ impl EventBufferCollector {
             // we finished the loop, we have to wait until the next push and try
             // again. if we wait too long, fail with a timeout error
             if let Err(_) = timeout_at(Instant::now() + wait_duration, self.on_push.recv()).await {
-                return Err("Expected assertion after timeout, did not happen".to_owned());
+                return Err(
+                    "wait_till: Expected assertion after timeout, did not happen".to_owned(),
+                );
             }
         }
     }
@@ -398,6 +400,9 @@ async fn run_event_collector(
     mut receiver: mpsc::Receiver<Event>,
 ) {
     while let Some(ev) = receiver.recv().await {
+        // IMPORTANT: DO NOT REMOVE DEBUG LINE COMMENT BELLOW
+        // println!("{:?}", ev);
+
         let mut ev_vec = events.lock().await;
         ev_vec.push(ev);
 

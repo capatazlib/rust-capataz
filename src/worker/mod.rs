@@ -11,6 +11,7 @@ use tokio::task::{self, JoinError, JoinHandle};
 use tokio::time;
 
 use crate::context::Context;
+use crate::notifier;
 
 // TODO: replace with OnceCell
 lazy_static! {
@@ -134,25 +135,22 @@ impl StartError {
 /// StartNotifier offers a convenient way to notify a worker spawner (a
 /// Supervisor in the general case) that the worker got started or that it
 /// failed to start.
-pub struct StartNotifier(Box<dyn FnOnce(Result<(), StartError>) + Send>);
+pub struct StartNotifier(notifier::StartNotifier<(), StartError>);
 
+// We wrap the internal SpawnNotifier to offer a better API experience on the
+// Worker declration for API clients
 impl StartNotifier {
     fn from_oneshot(sender: oneshot::Sender<Result<(), StartError>>) -> Self {
-        StartNotifier(Box::new(move |err| {
-            let _ = sender.send(err);
-        }))
+        let notifier = notifier::StartNotifier::from_oneshot(sender);
+        StartNotifier(notifier)
     }
 
-    fn call(self, err: Result<(), StartError>) {
-        self.0(err)
+    fn success(self) {
+        self.0.success(())
     }
 
-    pub fn success(self) {
-        self.call(Ok(()))
-    }
-
-    pub fn failed(self, err: anyhow::Error) {
-        self.call(Err(StartError::InitError { source: err }))
+    fn failed(self, err: anyhow::Error) {
+        self.0.failed(StartError::InitError { source: err })
     }
 }
 
@@ -163,8 +161,9 @@ pub struct Spec {
     termination_timeout: TerminationTimeout,
     restart: Restart,
     shutdown: Shutdown,
-    routine:
-        Box<dyn FnMut(Context, StartNotifier) -> BoxFuture<'static, Result<(), anyhow::Error>>>,
+    routine: Box<
+        dyn (FnMut(Context, StartNotifier) -> BoxFuture<'static, Result<(), anyhow::Error>>) + Send,
+    >,
 }
 
 /// Worker represents a routine that got started from a `worker::Spec`. It
@@ -201,7 +200,7 @@ impl Spec {
     ///
     pub fn new<F, O>(name: &str, mut routine0: F) -> Self
     where
-        F: FnMut(Context) -> O + 'static,
+        F: (FnMut(Context) -> O) + Send + 'static,
         O: Future<Output = anyhow::Result<()>> + FutureExt + Send + Sized + 'static,
     {
         let routine1 = move |ctx: Context, on_start: StartNotifier| {
@@ -242,7 +241,7 @@ impl Spec {
     ///
     pub fn new_with_start<F, O>(name: &str, mut routine0: F) -> Self
     where
-        F: FnMut(Context, StartNotifier) -> O + 'static,
+        F: (FnMut(Context, StartNotifier) -> O) + Send + 'static,
         O: Future<Output = anyhow::Result<()>> + FutureExt + Send + Sized + 'static,
     {
         let routine1 = move |ctx: Context, on_start: StartNotifier| routine0(ctx, on_start).boxed();
