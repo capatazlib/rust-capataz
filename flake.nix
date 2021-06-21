@@ -41,7 +41,7 @@
 
           devShell = pkgs.mkShell {
             buildInputs = builtins.attrValues {
-              inherit (pkgs) figlet commitsar cap-rust;
+              inherit (pkgs) figlet gnumake commitsar cap-rust;
             };
 
             shellHook = ''
