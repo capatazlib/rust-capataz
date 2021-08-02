@@ -21,18 +21,18 @@ pub enum Error {
 
 /// Offers a contract to terminate futures in a way that is explicit, reliable
 /// and safe. Values of `Context` are given to every supervised process to
-/// listen to for termination signals.
+/// listen for termination signals.
 #[derive(Clone, Debug)]
-pub struct Context<'a> {
+pub struct Context {
     // The `Future` that signals a process is done must be inside a `Box` so
     // that we can allow different kinds of futures (Pending, Abortable,
     // etc.) to be a available inside a `Context`; in parallel, we want to
     // allow multiple worker routines to listen to the `Context` future, for
     // that we use the `Shared` wrapper.
-    done: Shared<BoxFuture<'a, Result<(), Error>>>,
+    done: Shared<BoxFuture<'static, Result<(), Error>>>,
 }
 
-impl<'a> Context<'a> {
+impl Context {
     /// Creates a `Context` that will never expire
     pub fn new() -> Self {
         Self {
@@ -75,7 +75,7 @@ impl<'a> Context<'a> {
 
     /// Returns a future that is used on `select!` statements to asses if we
     /// should terminate a process.
-    pub fn done(&self) -> Shared<BoxFuture<'a, Result<(), Error>>> {
+    pub fn done(&self) -> Shared<BoxFuture<'static, Result<(), Error>>> {
         self.done.clone()
     }
 }

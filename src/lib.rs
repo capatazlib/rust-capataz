@@ -9,3 +9,7 @@
 /// This module provides the `Context` type which offers a contract to terminate
 /// supervised processes futures in a way that is explicit, reliable and safe.
 pub mod context;
+
+/// This module provides an internal `Worker` type that tracks the outcome of a
+/// wrapped future.
+mod worker;
