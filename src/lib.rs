@@ -10,6 +10,10 @@
 /// supervised processes futures in a way that is explicit, reliable and safe.
 pub mod context;
 
-/// This module provides an internal `Worker` type that tracks the outcome of a
-/// wrapped future.
-mod worker;
+/// Provides an internal `StartNotifier` type that helps notify task start
+/// outcomes from a caller running on a different thread.
+mod notifier;
+
+/// Provides an internal `TaskSpec` and `RunningTask` types that help track the
+/// outcome of a wrapped future.
+mod task;
