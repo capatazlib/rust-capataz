@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::{self, JoinHandle};
 use tokio::time::{timeout_at, Instant};
 
-use crate::supervisor;
+use crate::node::{leaf, subtree};
 
 /// A value that represents all the different events that may happen on a
 /// running supervision tree.
@@ -15,21 +15,28 @@ use crate::supervisor;
 pub enum Event {
     /// Signals a supervisor that started.
     SupervisorStarted(NodeData),
+    /// Signals a supervisor failed to build.
+    SupervisorBuildFailed(NodeData, Arc<subtree::BuildFailed>),
     /// Signals a supervisor fails to starts.
-    SupervisorStartFailed(NodeData, Arc<supervisor::StartError>),
+    SupervisorStartFailed(NodeData, Arc<subtree::StartFailed>),
     /// Signals a supervisor that got terminated.
     SupervisorTerminated(NodeData),
-    /// Signals a supervisor failed to terminate
-    SupervisorTerminationFailed(NodeData, Arc<supervisor::TerminationError>),
-    // SupervisorTerminationFailed(NodeData, Arc<supervisor::TerminationError>),
-    /// Signals a worker got started
+    /// Signals a supervisor failed to terminate.
+    SupervisorTerminationFailed(NodeData, Arc<subtree::TerminationFailed>),
+    /// Signals a worker got started.
     WorkerStarted(NodeData),
-    /// Signals a worker failed to start
-    WorkerStartFailed(NodeData, Arc<supervisor::StartError>),
-    /// Signals a worker was terminated
+    /// Signals a worker took too long to start and failed.
+    WorkerStartTimedOut(NodeData, Arc<leaf::StartTimedOut>),
+    /// Signals a worker failed to start.
+    WorkerStartFailed(NodeData, Arc<leaf::StartFailed>),
+    /// Signals a worker was terminated.
     WorkerTerminated(NodeData),
-    /// Signals a worker failed to terminate
-    WorkerTerminationFailed(NodeData, Arc<supervisor::TerminationError>),
+    /// Signals a worker took too long to terminate and failed.
+    WorkerTerminationTimedOut(NodeData, Arc<leaf::TerminationTimedOut>),
+    /// Signals a worker failed.
+    WorkerTerminationFailed(NodeData, Arc<leaf::TerminationFailed>),
+    /// Signals a worker panicked.
+    WorkerTerminationPanicked(NodeData, Arc<leaf::TerminationPanicked>),
 }
 
 /// Struct that holds details about the producer of the event (supervisor or
@@ -78,7 +85,17 @@ impl EventListener {
         Self(None)
     }
 
+    #[cfg(test)]
+    /// Returns an `EventListener` that sends its events to an `EventBufferCollector`.
+    pub async fn new_testing_listener() -> (EventListener, EventBufferCollector) {
+        let (send_ev, rx_ev) = mpsc::channel(1);
+        let notifier = EventListener::from_mpsc(send_ev);
+        let buffer = EventBufferCollector::from_mpsc(rx_ev).await;
+        (notifier, buffer)
+    }
+
     pub(crate) async fn call(&mut self, ev: Event) {
+        println!("{:?}", ev);
         if let Some(ref notify_fn) = self.0 {
             notify_fn(ev).await
         }
@@ -111,9 +128,23 @@ impl EventNotifier {
     pub(crate) async fn supervisor_start_failed(
         &mut self,
         runtime_name: &str,
-        err: Arc<supervisor::StartError>,
+        err: Arc<subtree::StartFailed>,
     ) {
         let ev = Event::SupervisorStartFailed(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn supervisor_build_failed(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<subtree::BuildFailed>,
+    ) {
+        let ev = Event::SupervisorBuildFailed(
             NodeData {
                 runtime_name: runtime_name.to_owned(),
             },
@@ -129,11 +160,10 @@ impl EventNotifier {
         self.0.call(ev).await;
     }
 
-
     pub(crate) async fn supervisor_termination_failed(
         &mut self,
         runtime_name: &str,
-        err: Arc<supervisor::TerminationError>,
+        err: Arc<subtree::TerminationFailed>,
     ) {
         let ev = Event::SupervisorTerminationFailed(
             NodeData {
@@ -154,9 +184,23 @@ impl EventNotifier {
     pub(crate) async fn worker_start_failed(
         &mut self,
         runtime_name: &str,
-        err: Arc<supervisor::StartError>,
+        err: Arc<leaf::StartFailed>,
     ) {
         let ev = Event::WorkerStartFailed(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn worker_start_timed_out(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<leaf::StartTimedOut>,
+    ) {
+        let ev = Event::WorkerStartTimedOut(
             NodeData {
                 runtime_name: runtime_name.to_owned(),
             },
@@ -175,9 +219,37 @@ impl EventNotifier {
     pub(crate) async fn worker_termination_failed(
         &mut self,
         runtime_name: &str,
-        err: Arc<supervisor::TerminationError>,
+        err: Arc<leaf::TerminationFailed>,
     ) {
         let ev = Event::WorkerTerminationFailed(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn worker_termination_panicked(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<leaf::TerminationPanicked>,
+    ) {
+        let ev = Event::WorkerTerminationPanicked(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn worker_termination_timed_out(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<leaf::TerminationTimedOut>,
+    ) {
+        let ev = Event::WorkerTerminationTimedOut(
             NodeData {
                 runtime_name: runtime_name.to_owned(),
             },
@@ -282,182 +354,249 @@ impl EventAssert {
             panic!("EventAssert failed: {}", err_msg);
         };
     }
-}
 
-/// supervisor_started asserts an event that tells a supervisor with the given
-/// name started
-pub fn supervisor_started<S>(input_name0: S) -> EventAssert
-where
-    S: Into<String>,
-{
-    let input_name = input_name0.into();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::SupervisorStarted(NodeData { runtime_name }) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting SupervisorStarted with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
-            }
-        }
-        _ => Some(format!("Expecting SupervisorStarted; got {:?} instead", ev)),
-    }))
-}
-
-/// supervisor_terminated asserts an event that tells a supervisor with the given
-/// name was terminated
-pub fn supervisor_terminated<S>(input_name0: S) -> EventAssert
-where
-    S: Into<String> + Clone,
-{
-    let input_name = input_name0.into();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::SupervisorTerminated(NodeData { runtime_name }) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting SupervisorTerminated with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
-            }
-        }
-        _ => Some(format!(
-            "Expecting SupervisorTerminated; got {:?} instead",
-            ev
-        )),
-    }))
-}
-
-/// TODO
-pub fn supervisor_termination_failed<S>(input_name0: S) -> EventAssert
+    /// supervisor_started asserts an event that tells a supervisor with the given
+    /// name started
+    pub fn supervisor_started<S>(input_name0: S) -> EventAssert
     where
-    S: Into<String> + Clone,
-{
-    let input_name = input_name0.into();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::SupervisorTerminationFailed(NodeData { runtime_name }, _) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting SupervisorTerminationFailed with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
+        S: Into<String>,
+    {
+        let input_name = input_name0.into();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::SupervisorStarted(NodeData { runtime_name }) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting SupervisorStarted with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(format!(
-            "Expecting SupervisorTerminationFailed; got {:?} instead",
-            ev
-        )),
-    }))
+            _ => Some(format!("Expecting SupervisorStarted; got {:?} instead", ev)),
+        }))
+    }
 
-}
-
-/// supervisor_terminated asserts an event that tells a supervisor with the given
-/// name was terminated
-pub fn supervisor_start_failed<S>(input_name0: S) -> EventAssert
-where
-    S: Into<String> + Clone,
-{
-    let input_name = input_name0.into();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::SupervisorStartFailed(NodeData { runtime_name }, _) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting SupervisorStartFailed with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
+    /// supervisor_terminated asserts an event that tells a supervisor with the given
+    /// name was terminated
+    pub fn supervisor_terminated<S>(input_name0: S) -> EventAssert
+    where
+        S: Into<String> + Clone,
+    {
+        let input_name = input_name0.into();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::SupervisorTerminated(NodeData { runtime_name }) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting SupervisorTerminated with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(format!(
-            "Expecting SupervisorStartFailed; got {:?} instead",
-            ev
-        )),
-    }))
-}
+            _ => Some(format!(
+                "Expecting SupervisorTerminated; got {:?} instead",
+                ev
+            )),
+        }))
+    }
 
-/// worker_started asserts an event that tells a worker with the given name
-/// started
-pub fn worker_started(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::WorkerStarted(NodeData { runtime_name }) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting WorkerStarted with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
+    /// TODO
+    pub fn supervisor_termination_failed<S>(input_name0: S) -> EventAssert
+    where
+        S: Into<String> + Clone,
+    {
+        let input_name = input_name0.into();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::SupervisorTerminationFailed(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting SupervisorTerminationFailed with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
-    }))
-}
+            _ => Some(format!(
+                "Expecting SupervisorTerminationFailed; got {:?} instead",
+                ev
+            )),
+        }))
+    }
 
-/// Asserts that an `Event` is of value `WorkerStartFailed` with the specified
-/// worker name.
-pub fn worker_start_failed(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::WorkerStartFailed(NodeData { runtime_name }, _) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting WorkerStartFailed with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
+    /// TODO
+    pub fn supervisor_build_failed<S>(input_name0: S) -> EventAssert
+    where
+        S: Into<String> + Clone,
+    {
+        let input_name = input_name0.into();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::SupervisorBuildFailed(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting SupervisorBuildFailed with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
-    }))
-}
+            _ => Some(format!(
+                "Expecting SupervisorTerminationFailed; got {:?} instead",
+                ev
+            )),
+        }))
+    }
 
-/// Asserts that an `Event` is of value `WorkerTerminated` with the specified
-/// worker name.
-pub fn worker_terminated(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::WorkerTerminated(NodeData { runtime_name }) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting WorkerTerminated with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
+    /// supervisor_terminated asserts an event that tells a supervisor with the given
+    /// name was terminated
+    pub fn supervisor_start_failed<S>(input_name0: S) -> EventAssert
+    where
+        S: Into<String> + Clone,
+    {
+        let input_name = input_name0.into();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::SupervisorStartFailed(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting SupervisorStartFailed with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(format!("Expecting WorkerTerminated; got {:?} instead", ev)),
-    }))
-}
+            _ => Some(format!(
+                "Expecting SupervisorStartFailed; got {:?} instead",
+                ev
+            )),
+        }))
+    }
 
-/// Asserts that an `Event` is of value `WorkerTerminationFailed` with the
-/// specified worker name.
-pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
-    let input_name = input_name0.to_owned();
-    EventAssert(Box::new(move |ev| match &ev {
-        Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
-            if runtime_name != &*input_name {
-                Some(format!(
-                    "Expecting WorkerTerminationFailed with name {}; got {:?} instead",
-                    input_name, ev
-                ))
-            } else {
-                None
+    /// worker_started asserts an event that tells a worker with the given name
+    /// started
+    pub fn worker_started(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerStarted(NodeData { runtime_name }) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerStarted with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
             }
-        }
-        _ => Some(format!(
-            "Expecting WorkerTerminationFailed; got {:?} instead",
-            ev
-        )),
-    }))
+            _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
+        }))
+    }
+
+    /// Asserts that an `Event` is of value `WorkerStartFailed` with the specified
+    /// worker name.
+    pub fn worker_start_failed(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerStartFailed(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerStartFailed with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!("Expecting WorkerStarted; got {:?} instead", ev)),
+        }))
+    }
+
+    /// Asserts that an `Event` is of value `WorkerStartTimedOut` with the specified
+    /// worker name.
+    pub fn worker_start_timed_out(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerStartTimedOut(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerStartTimedOut with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!(
+                "Expecting WorkerStartTimedOut; got {:?} instead",
+                ev
+            )),
+        }))
+    }
+
+    /// Asserts that an `Event` is of value `WorkerTerminated` with the specified
+    /// worker name.
+    pub fn worker_terminated(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerTerminated(NodeData { runtime_name }) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerTerminated with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!("Expecting WorkerTerminated; got {:?} instead", ev)),
+        }))
+    }
+
+    /// Asserts that an `Event` is of value `WorkerTerminationFailed` with the
+    /// specified worker name.
+    pub fn worker_termination_failed(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerTerminationFailed with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!(
+                "Expecting WorkerTerminationFailed; got {:?} instead",
+                ev
+            )),
+        }))
+    }
+
+    /// Asserts that an `Event` is of value `WorkerTerminationTimedOut` with the specified
+    /// worker name.
+    pub fn worker_termination_timed_out(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerTerminationTimedOut(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerTerminationTimedOut with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!(
+                "Expecting WorkerTerminationTimedOut; got {:?} instead",
+                ev
+            )),
+        }))
+    }
 }
 
 /// run_event_collector is an internal function that receives supervision events
@@ -481,12 +620,4 @@ async fn run_event_collector(
         // always read from the on_push channel
         let _ = notify_push.send(());
     }
-}
-
-/// Returns an `EventListener` that sends its events to an `EventBufferCollector`.
-pub async fn new_testing_listener() -> (EventListener, EventBufferCollector) {
-    let (send_ev, rx_ev) = mpsc::channel(1);
-    let notifier = EventListener::from_mpsc(send_ev);
-    let buffer = EventBufferCollector::from_mpsc(rx_ev).await;
-    (notifier, buffer)
 }
