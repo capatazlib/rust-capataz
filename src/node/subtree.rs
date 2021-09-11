@@ -92,6 +92,12 @@ pub struct TerminationFailed {
     cleanup_err: Option<anyhow::Error>,
 }
 
+impl TerminationFailed {
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+}
+
 /// Unifies all possible errors that are reported when terminating a
 /// `capataz::SupervisorSpec`.
 ///
@@ -105,6 +111,24 @@ pub enum TerminationError {
 }
 
 impl TerminationError {
+    pub fn get_runtime_name(&self) -> &str {
+        match &self {
+            Self::TerminationFailed(termination_err) => termination_err.get_runtime_name(),
+            Self::StartErrorAlreadyReported => {
+                unreachable!("invalid implementation; start error is never delivered via sup_chan")
+            }
+        }
+    }
+
+    pub fn get_cause_err(self) -> anyhow::Error {
+        match self {
+            Self::TerminationFailed(termination_err) => anyhow::Error::new(termination_err),
+            Self::StartErrorAlreadyReported => {
+                unreachable!("invalid implementation; start error is never delivered via sup_chan")
+            }
+        }
+    }
+
     pub(crate) fn termination_failed(
         runtime_name: &str,
         termination_err: Vec<node::TerminationError>,

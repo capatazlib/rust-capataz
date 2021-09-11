@@ -65,6 +65,12 @@ pub struct TerminationFailed {
     termination_err: anyhow::Error,
 }
 
+impl TerminationFailed {
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+}
+
 /// Represents an error reported by the capataz API that indicates a
 /// `capataz::Node` takes too long than allowed to terminate.
 ///
@@ -73,6 +79,12 @@ pub struct TerminationFailed {
 #[error("worker took too long to terminate")]
 pub struct TerminationTimedOut {
     runtime_name: String,
+}
+
+impl TerminationTimedOut {
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
 }
 
 /// Represents an unexpected error in a `capataz::Node` business logic. This
@@ -87,6 +99,12 @@ pub struct TerminationPanicked {
     runtime_name: String,
 }
 
+impl TerminationPanicked {
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+}
+
 /// Unifies all possible errors that are reported when terminating a
 /// `capataz::Node`.
 ///
@@ -99,6 +117,36 @@ pub enum TerminationError {
     TerminationTimedOut(Arc<TerminationTimedOut>),
     #[error("{0}")]
     TerminationPanicked(Arc<TerminationPanicked>),
+}
+
+impl TerminationError {
+    pub fn get_runtime_name(&self) -> &str {
+        match &self {
+            TerminationError::TerminationFailed(termination_err) => {
+                termination_err.get_runtime_name()
+            }
+            TerminationError::TerminationPanicked(termination_err) => {
+                termination_err.get_runtime_name()
+            }
+            TerminationError::TerminationTimedOut(termination_err) => {
+                termination_err.get_runtime_name()
+            }
+        }
+    }
+
+    pub fn get_cause_err(&self) -> anyhow::Error {
+        match &self {
+            TerminationError::TerminationFailed(termination_err) => {
+                anyhow::Error::new(termination_err.clone())
+            }
+            TerminationError::TerminationPanicked(termination_err) => {
+                anyhow::Error::new(termination_err.clone())
+            }
+            TerminationError::TerminationTimedOut(termination_err) => {
+                anyhow::Error::new(termination_err.clone())
+            }
+        }
+    }
 }
 
 /// Represents the specification of a worker `capataz::Node` in the supervision

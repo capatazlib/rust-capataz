@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use thiserror::Error;
 
 use crate::context::Context;
@@ -37,6 +38,22 @@ pub enum TerminationError {
     Leaf(#[from] leaf::TerminationError),
     #[error("{0}")]
     Subtree(#[from] subtree::TerminationError),
+}
+
+impl TerminationError {
+    pub fn get_cause_err(self) -> anyhow::Error {
+        match self {
+            TerminationError::Leaf(termination_err) => termination_err.get_cause_err(),
+            TerminationError::Subtree(termination_err) => anyhow::Error::new(termination_err),
+        }
+    }
+
+    pub fn get_runtime_name(&self) -> &str {
+        match &self {
+            TerminationError::Leaf(termination_err) => termination_err.get_runtime_name(),
+            TerminationError::Subtree(termination_err) => termination_err.get_runtime_name(),
+        }
+    }
 }
 
 /// Node represents a tree node in a supervision tree, it could either be a

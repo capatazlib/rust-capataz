@@ -440,15 +440,27 @@ impl Spec {
                     return Ok(());
                 },
                 // An error was reported by a child node
-                Some(_node_err)  = sup_chan.recv() => {
-                    // match node_err {
-                    //     // in the situation we have a termination error
-                    //     task::TerminationError(TerminationError::SupervisorTerminationFailed) => {
+                Some(node_err)  = sup_chan.recv() => {
 
-                    //     }
-                    //     _ => todo!("execute restart logic here")
-                    // }
-                    todo!("implement restart logic here")
+                    match node_err {
+                        task::TerminationError::TaskForcedKilled { .. } => {
+                            unreachable!("invalid implementation; forced kill should not be sent to parent_chan")
+                        }
+                        task::TerminationError::TaskAborted { .. } => {
+                            unreachable!("invalid implementation; abort task should not be sent to parent_chan")
+                        }
+                        task::TerminationError::TaskFailureNotified { .. } => {
+                            unreachable!("invalid implementation; failure notified should not be sent to parent_chan")
+                        }
+                        task::TerminationError::TaskPanic { .. } => {
+                            todo!("panic handling")
+                        }
+                        task::TerminationError::TaskFailed { err, .. } => {
+                            let runtime_name = err.get_runtime_name().to_owned();
+                            let termination_err = err.get_cause_err();
+                            todo!("error handling for {}: {:?}", runtime_name, termination_err)
+                        }
+                    }
                 }
             }
         }
