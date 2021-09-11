@@ -225,46 +225,44 @@ impl RunningSubtree {
         // `node::TerminationError` rather than `TerminationError` type of this
         // module.
         match result {
-            // SAFETY: The scenario bellow should never happen, as the task body
-            // never return leaf::TerminationError values.
-            Err(task::TerminationError::TaskFailed(node::TerminationError::Leaf(_))) => {
-                unreachable!(
-                    "implementation error; subtree node is returning a leaf termination error"
-                )
-            }
             // Ignore this case as the error has been notified elsewhere.
-            Err(task::TerminationError::TaskFailureNotified) => {
+            Err(task::TerminationError::TaskFailureNotified { .. }) => {
                 let termination_err = TerminationError::StartErrorAlreadyReported.into();
                 Err(termination_err)
             }
             // SAFETY: This will never happen because supervisors are never aborted
-            Err(task::TerminationError::TaskAborted) => {
+            Err(task::TerminationError::TaskAborted { .. }) => {
                 unreachable!("invalid implementation; supervisor logic is never aborted")
             }
             // SAFETY: This will never happen because supervisors don't have a termination timeout
-            Err(task::TerminationError::TaskForcedKilled) => {
+            Err(task::TerminationError::TaskForcedKilled { .. }) => {
                 unreachable!("invalid implementation; supervisor logic has infinite timeout")
             }
             // SAFETY: This will never happen because supervisor logic must be panic free
-            Err(task::TerminationError::TaskPanic) => {
+            Err(task::TerminationError::TaskPanic { .. }) => {
                 unreachable!("invalid implementation; supervisor logic should never panic")
             }
             // Supervisor gave up on restart logic
-            Err(task::TerminationError::TaskFailed(node::TerminationError::Subtree(
-                TerminationError::TerminationFailed(termination_err),
-            ))) => {
-                ev_notifier
-                    .supervisor_termination_failed(&runtime_name, termination_err.clone())
-                    .await;
-                Err(TerminationError::TerminationFailed(termination_err))
-            }
-            // SAFETY: The scenario bellow should never happen, as the task body never
-            // returns values with a variant other than TerminationFailed.
-            Err(task::TerminationError::TaskFailed(node::TerminationError::Subtree(other_err))) => {
-                unreachable!(
-                    "implementation error; subtree nodes should never return these errors from a task. error: {:?}",
-                    other_err,
-                )
+            Err(task::TerminationError::TaskFailed { err, .. }) => {
+                match err {
+                    node::TerminationError::Subtree(TerminationError::TerminationFailed(
+                        termination_err,
+                    )) => {
+                        // Report the supervisor termination failure
+                        ev_notifier
+                            .supervisor_termination_failed(&runtime_name, termination_err.clone())
+                            .await;
+                        Err(TerminationError::TerminationFailed(termination_err))
+                    }
+                    other_err => {
+                        // SAFETY: The scenario bellow should never happen, as the task body never
+                        // returns values with a variant other than subtree::TerminationFailed.
+                        unreachable!(
+                            "implementation error; subtree nodes should never return these errors from a task. error: {:?}",
+                            other_err,
+                        )
+                    }
+                }
             }
             // The supervisor was terminated without any errors.
             Ok(_) => {

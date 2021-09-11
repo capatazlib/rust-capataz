@@ -75,6 +75,12 @@ pub struct TaskSpec<A, SE, TE> {
         Box<dyn (FnOnce(Context, StartNotifier<SE>) -> BoxFuture<'static, Result<A, TE>>) + Send>,
 }
 
+#[derive(Debug)]
+/// Represents the information of the failing task
+pub struct TaskInfo {
+    runtime_name: String,
+}
+
 /// Error that can be reported back when terminating a RunningTask
 #[derive(Debug, Error)]
 pub enum TerminationError<E>
@@ -84,16 +90,16 @@ where
     /// Indicates the task did not respect the shutdown mechanism and had to
     /// be force-killed.
     #[error("task was hard killed after timeout")]
-    TaskForcedKilled,
+    TaskForcedKilled { info: TaskInfo },
     /// Indicates the task was cancelled.
     #[error("task was aborted")]
-    TaskAborted,
+    TaskAborted { info: TaskInfo },
     /// Indicates the task had an error before it terminated.
-    #[error("task runtime failed: {0:?}")]
-    TaskFailed(E),
+    #[error("task runtime failed: {err:?}")]
+    TaskFailed { info: TaskInfo, err: E },
     /// Indicates the task had a panic while on runtime.
     #[error("task panicked at runtime")]
-    TaskPanic,
+    TaskPanic { info: TaskInfo },
     /// Returned when the failure has already been reported to error listener
     #[error("should never see this error message")]
     TaskFailureNotified,
@@ -122,22 +128,26 @@ where
     /// Internal implementation of the wait logic used in both the `wait` and
     /// `terminate` methods.
     async fn wait_handle(
+        runtime_name: &str,
         join_handle: JoinHandle<Result<A, TerminationError<TE>>>,
     ) -> Result<A, TerminationError<TE>> {
         // await for the RunningTask routine result; the result is going to be
         // wrapped by a Result created from the JoinHandle API.
+        let runtime_name = runtime_name.to_owned();
         let join_result = join_handle.await;
         match join_result {
             // JoinHandle Error.
             Err(join_error) => {
                 if join_error.is_panic() {
                     // Caused when the task panicked.
-                    Err(TerminationError::TaskPanic)
+                    Err(TerminationError::TaskPanic {
+                        info: TaskInfo { runtime_name },
+                    })
                 } else {
                     // The `JoinHandle` was dropped or the `JoinHandle.abort`
                     // method was called explicitly. The current implementation
                     // doesn't allow this, so this branch cannot happen.
-                    unreachable!("RunningTask's JoinHandle was used in an unexpected way")
+                    unreachable!("invalid implementation; RunningTask's JoinHandle was used in an unexpected way")
                 }
             }
             // The RunningTask routine finished with an error.
@@ -149,13 +159,14 @@ where
 
     /// Waits for the task task to finish indefinitely.
     pub(crate) async fn wait(self) -> Result<A, TerminationError<TE>> {
-        Self::wait_handle(self.join_handle).await
+        Self::wait_handle(&self.runtime_name, self.join_handle).await
     }
 
     /// Executes the abort logic of the routine and then waits for a specified
     /// duration of time before it kills the task.
     pub(crate) async fn terminate(self) -> Result<A, TerminationError<TE>> {
         let Self {
+            runtime_name,
             kill_handle,
             join_handle,
             termination_handle,
@@ -169,7 +180,7 @@ where
 
         // Handle the JoinHandle API result once for Indefinitely and Timeout
         // shutdown branches.
-        let wait_result = Self::wait_handle(join_handle);
+        let wait_result = Self::wait_handle(&runtime_name, join_handle);
 
         match shutdown {
             // Wait for a duration of time
@@ -182,7 +193,9 @@ where
                         // Timeout duration has been reached, force-kill the
                         // routine.
                         kill_handle.abort();
-                        Err(TerminationError::TaskForcedKilled)
+                        Err(TerminationError::TaskForcedKilled {
+                            info: TaskInfo { runtime_name: runtime_name.clone() },
+                        })
                     }
                     join_result = wait_result => {
                         // Task finished before the timeout, return result
@@ -291,6 +304,7 @@ where
         } = self;
 
         let runtime_name = build_runtime_name(parent_name, &name);
+        let task_runtime_name = runtime_name.clone();
 
         // Create the notification channel that allow users of this API to
         // signal capataz that the task started.
@@ -310,17 +324,30 @@ where
             let task_result = task_routine.await;
             match task_result {
                 Err(_) => {
+                    let termination_err = TaskAborted {
+                        info: TaskInfo {
+                            runtime_name: task_runtime_name.clone(),
+                        },
+                    };
                     if let Some(ref parent_chan) = &parent_chan {
-                        parent_chan.report(TaskAborted).await?;
-                    }
-                    Err(TaskAborted)
-                }
-                Ok(Err(err)) => {
-                    if let Some(ref parent_chan) = &parent_chan {
-                        parent_chan.report(TaskFailed(err)).await?;
+                        parent_chan.report(termination_err).await?;
                         Err(TaskFailureNotified)
                     } else {
-                        Err(TaskFailed(err))
+                        Err(termination_err)
+                    }
+                }
+                Ok(Err(err)) => {
+                    let termination_err = TaskFailed {
+                        info: TaskInfo {
+                            runtime_name: task_runtime_name.clone(),
+                        },
+                        err,
+                    };
+                    if let Some(ref parent_chan) = &parent_chan {
+                        parent_chan.report(termination_err).await?;
+                        Err(TaskFailureNotified)
+                    } else {
+                        Err(termination_err)
                     }
                 }
                 Ok(Ok(result)) => Ok(result),
@@ -534,7 +561,7 @@ mod tests {
         time::advance(time::Duration::from_secs(5)).await;
 
         match result.await {
-            Err(TerminationError::TaskForcedKilled) => {
+            Err(TerminationError::TaskForcedKilled { .. }) => {
                 // Everything ok.
             }
             Err(err) => {
@@ -608,8 +635,8 @@ mod tests {
         // returned in the result.
         assert_eq!("task runtime failed: some failure", format!("{}", err));
         match result {
-            Err(TerminationError::TaskFailureNotified) => (),
-            Err(TerminationError::TaskFailed(err)) => {
+            Err(TerminationError::TaskFailureNotified { .. }) => (),
+            Err(TerminationError::TaskFailed { err, .. }) => {
                 assert!(false, "expected TaskFailureNotified, got: {}", err)
             }
             Err(err) => {

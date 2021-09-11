@@ -318,34 +318,31 @@ impl RunningLeaf {
         // `node::TerminationError` rather than `TerminationError` type of this
         // module.
         match result {
-            // The scenario bellow should never happen, as the body of a leaf
-            // node never returns `subtree::TerminationError` values; if it does
-            // we have an implementation error.
-            Err(task::TerminationError::TaskFailed(node::TerminationError::Subtree(_))) => {
-                unreachable!(
-                    "implementation error; leaf node is returnning a subtree termination error"
-                )
-            }
             // The termination failed with an expected business error.
-            Err(task::TerminationError::TaskFailed(node::TerminationError::Leaf(
-                TerminationError::TerminationFailed(termination_err),
-            ))) => {
-                ev_notifier
-                    .worker_termination_failed(&runtime_name, termination_err.clone())
-                    .await;
-                Err(TerminationError::TerminationFailed(termination_err))
-            }
-            // The scenario bellow should never happen, as the task body never
-            // returns values with a variant other than TerminationFailed.
-            Err(task::TerminationError::TaskFailed(node::TerminationError::Leaf(other_err))) => {
-                unreachable!(
-                    "implementation error; leaf nodes should never return these errors from a task. error: {:?}",
-                    other_err,
-                )
+            Err(task::TerminationError::TaskFailed { err, .. }) => {
+                match err {
+                    node::TerminationError::Leaf(TerminationError::TerminationFailed(
+                        termination_err,
+                    )) => {
+                        ev_notifier
+                            .worker_termination_failed(&runtime_name, termination_err.clone())
+                            .await;
+                        Err(TerminationError::TerminationFailed(termination_err))
+                    }
+                    // The scenario bellow should never happen, as the body of a
+                    // leaf node never returns `subtree::TerminationError`
+                    // values; if it does we have an implementation error.
+                    other_err => {
+                        unreachable!(
+                            "implementation error; leaf nodes should never return these errors from a task. error: {:?}",
+                            other_err,
+                        )
+                    }
+                }
             }
             // When the task gets forced killed, is because it took too long to
             // finish. Transform this signal to a TimedOut error.
-            Err(task::TerminationError::TaskForcedKilled) => {
+            Err(task::TerminationError::TaskForcedKilled { .. }) => {
                 let termination_err = Arc::new(TerminationTimedOut {
                     runtime_name: runtime_name.to_owned(),
                 });
@@ -356,7 +353,7 @@ impl RunningLeaf {
             }
             // When the task panics, the task API returns this error. Transform
             // this signal to a TerminationPanicked error.
-            Err(task::TerminationError::TaskPanic) => {
+            Err(task::TerminationError::TaskPanic { .. }) => {
                 // TODO: add panic metadata
                 let termination_err = Arc::new(TerminationPanicked {
                     runtime_name: runtime_name.to_owned(),
