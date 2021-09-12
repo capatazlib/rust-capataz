@@ -72,7 +72,7 @@ pub struct TaskSpec<A, SE, TE> {
     startup: Startup,
     shutdown: Shutdown,
     routine:
-        Box<dyn (FnOnce(Context, StartNotifier<SE>) -> BoxFuture<'static, Result<A, TE>>) + Send>,
+        Box<dyn (FnMut(Context, StartNotifier<SE>) -> BoxFuture<'static, Result<A, TE>>) + Send>,
 }
 
 #[derive(Debug)]
@@ -106,8 +106,7 @@ where
 }
 
 /// Runtime representation of a TaskSpec.
-#[derive(Debug)]
-pub struct RunningTask<A, TE>
+pub struct RunningTask<A, SE, TE>
 where
     TE: fmt::Debug,
 {
@@ -117,11 +116,10 @@ where
     kill_handle: future::AbortHandle,
 
     // static information
-    name: String,
-    shutdown: Shutdown,
+    spec: TaskSpec<A, SE, TE>,
 }
 
-impl<A, TE> RunningTask<A, TE>
+impl<A, SE, TE> RunningTask<A, SE, TE>
 where
     TE: fmt::Debug,
 {
@@ -164,13 +162,13 @@ where
 
     /// Executes the abort logic of the routine and then waits for a specified
     /// duration of time before it kills the task.
-    pub(crate) async fn terminate(self) -> Result<A, TerminationError<TE>> {
+    pub(crate) async fn terminate(self) -> (Result<A, TerminationError<TE>>, TaskSpec<A, SE, TE>) {
         let Self {
             runtime_name,
             kill_handle,
             join_handle,
             termination_handle,
-            shutdown,
+            spec,
             ..
         } = self;
 
@@ -182,12 +180,12 @@ where
         // shutdown branches.
         let wait_result = Self::wait_handle(&runtime_name, join_handle);
 
-        match shutdown {
+        let task_result = match &spec.shutdown {
             // Wait for a duration of time
             Shutdown::Timeout(wait_duration) => {
                 // Create context value with the shutdown timeout to do a select
                 // between the JoinHandle await and the context timeout.
-                let ctx = Context::new().with_timeout(wait_duration);
+                let ctx = Context::new().with_timeout(wait_duration.clone());
                 tokio::select! {
                     _ = ctx.done() => {
                         // Timeout duration has been reached, force-kill the
@@ -205,7 +203,9 @@ where
             }
             // Client doesn't care if this task takes time to terminate.
             Shutdown::Indefinitely => wait_result.await,
-        }
+        };
+
+        (task_result, spec)
     }
 
     pub(crate) fn get_runtime_name(&self) -> &str {
@@ -249,10 +249,10 @@ where
     /// This call will cause the whole supervision system start procedure to
     /// abort and fail fast.
     ///
-    pub fn new_with_start<S, F, O>(name: S, routine: F) -> Self
+    pub fn new_with_start<S, F, O>(name: S, mut routine: F) -> Self
     where
         S: Into<String>,
-        F: (FnOnce(Context, StartNotifier<SE>) -> O) + Send + 'static,
+        F: (FnMut(Context, StartNotifier<SE>) -> O) + Send + 'static,
         O: future::Future<Output = Result<A, TE>> + FutureExt + Send + Sized + 'static,
     {
         let routine =
@@ -294,10 +294,10 @@ where
         parent_ctx: &Context,
         parent_name: &str,
         parent_chan: Option<TerminationNotifier<TE>>,
-    ) -> Result<RunningTask<A, TE>, StartError<SE>> {
+    ) -> Result<RunningTask<A, SE, TE>, StartError<SE>> {
         let Self {
             name,
-            routine,
+            mut routine,
             startup,
             shutdown,
             ..
@@ -382,8 +382,14 @@ where
                 join_handle,
                 termination_handle,
                 kill_handle,
-                name,
-                shutdown,
+
+                // Recreate the spec again
+                spec: TaskSpec {
+                    name,
+                    startup,
+                    shutdown,
+                    routine,
+                },
             }),
         }
     }
@@ -551,23 +557,30 @@ mod tests {
         let sender = TerminationNotifier::from_mpsc(sender);
 
         let ctx = Context::new();
-        let task = task_spec
-            .start(&ctx, "caller", Some(sender))
-            .await
-            .expect("task should start without errors");
+        let result = task_spec.start(&ctx, "caller", Some(sender)).await;
+
+        let task = match result {
+            Err(start_err) => {
+                assert!(false, "task should start without errors {:?}", start_err);
+                return;
+            }
+            Ok(task) => task,
+        };
 
         let result = task.terminate();
 
         time::advance(time::Duration::from_secs(5)).await;
 
-        match result.await {
+        let (result, _) = result.await;
+
+        match result {
             Err(TerminationError::TaskForcedKilled { .. }) => {
                 // Everything ok.
             }
             Err(err) => {
                 assert!(false, "expected TaskForcedKilled, got: {}", err)
             }
-            Ok(()) => {
+            Ok(_) => {
                 assert!(false, "expected error; got valid result");
             }
         }
@@ -594,12 +607,12 @@ mod tests {
             .await
             .expect("task should start without errors");
 
-        let result = task.terminate().await;
+        let (result, _) = task.terminate().await;
         match result {
             Err(err) => {
                 assert!(false, "expected Ok, got: {}", err)
             }
-            Ok(()) => {
+            Ok(_) => {
                 // Everything ok.
             }
         }
@@ -626,7 +639,7 @@ mod tests {
             .await
             .expect("task should start without errors");
 
-        let result = task.terminate().await;
+        let (result, _) = task.terminate().await;
         let err = receiver
             .recv()
             .await
@@ -642,9 +655,74 @@ mod tests {
             Err(err) => {
                 assert!(false, "expected TaskFailed error, got: {}", err)
             }
-            Ok(()) => {
+            Ok(_) => {
                 assert!(false, "expected error; got valid result");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_double_start_ok() {
+        let task_spec: TaskSpec = task::TaskSpec::new_with_start(
+            "task",
+            |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
+                notify.success();
+                let _ = ctx.done().await;
+                Ok(())
+            },
+        );
+        let (sender, _) = mpsc::channel(100);
+        let sender = TerminationNotifier::from_mpsc(sender);
+
+        let ctx = Context::new();
+
+        let result = task_spec.start(&ctx, "caller", Some(sender)).await;
+        let task_spec = match result {
+            Err(start_err) => {
+                assert!(
+                    false,
+                    "expected ok, got error on first start: {:?}",
+                    start_err
+                );
+                return;
+            }
+            Ok(running_task) => match running_task.terminate().await {
+                (Err(termination_err), _) => {
+                    assert!(
+                        false,
+                        "expected ok, got error on second termination: {:?}",
+                        termination_err
+                    );
+                    return;
+                }
+                (_, task_spec) => task_spec,
+            },
+        };
+
+        // From this section, re-use the returned task_spec a second time (restart)
+
+        let (sender, _) = mpsc::channel(100);
+        let sender = TerminationNotifier::from_mpsc(sender);
+
+        let result = task_spec.start(&ctx, "caller", Some(sender)).await;
+        match result {
+            Err(start_err) => {
+                assert!(
+                    false,
+                    "expected ok, got error on second start: {:?}",
+                    start_err
+                );
+            }
+            Ok(running_task) => match running_task.terminate().await {
+                (Err(termination_err), _) => {
+                    assert!(
+                        false,
+                        "expected ok, got error on second termination: {:?}",
+                        termination_err
+                    );
+                }
+                _ => (),
+            },
+        };
     }
 }

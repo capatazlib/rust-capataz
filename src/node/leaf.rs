@@ -1,6 +1,8 @@
-use futures::future::{Future, FutureExt};
 use std::sync::Arc;
+
+use futures::future::{Future, FutureExt};
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 use crate::context::Context;
 use crate::events::EventNotifier;
@@ -203,14 +205,19 @@ impl Spec {
     pub fn new<S, F, O>(name: S, mut opts: Vec<Opt>, f: F) -> node::Node
     where
         S: Into<String>,
-        F: (FnOnce(Context) -> O) + Send + 'static,
+        F: (FnMut(Context) -> O) + Send + Sync + 'static,
         O: Future<Output = Result<(), anyhow::Error>> + FutureExt + Send + Sized + 'static,
     {
+        let f_lock = Arc::new(Mutex::new(f));
         let mut task_spec = task::TaskSpec::new_with_start(
             name,
-            |ctx: Context, start_notifier: StartNotifier| async {
-                start_notifier.success();
-                f(ctx).await.map_err(Spec::to_leaf_error)
+            move |ctx: Context, start_notifier: StartNotifier| {
+                let f_lock = f_lock.clone();
+                async move {
+                    let mut f = f_lock.lock().await;
+                    start_notifier.success();
+                    f(ctx).await.map_err(Spec::to_leaf_error)
+                }
             },
         );
 
@@ -237,13 +244,18 @@ impl Spec {
     pub fn new_with_start<S, F, O>(name: S, mut opts: Vec<Opt>, f: F) -> node::Node
     where
         S: Into<String>,
-        F: (FnOnce(Context, StartNotifier) -> O) + Send + 'static,
+        F: (FnMut(Context, StartNotifier) -> O) + Send + 'static,
         O: Future<Output = Result<(), anyhow::Error>> + FutureExt + Send + Sized + 'static,
     {
+        let f_lock = Arc::new(Mutex::new(f));
         let mut task_spec = task::TaskSpec::new_with_start(
             name,
-            |ctx: Context, start_notifier: StartNotifier| async {
-                f(ctx, start_notifier).await.map_err(Spec::to_leaf_error)
+            move |ctx: Context, start_notifier: StartNotifier| {
+                let f_lock = f_lock.clone();
+                async move {
+                    let mut f = f_lock.lock().await;
+                    f(ctx, start_notifier).await.map_err(Spec::to_leaf_error)
+                }
             },
         );
 
@@ -315,7 +327,10 @@ impl Spec {
                 // errors.
                 ev_notifier.worker_started(&runtime_name).await;
                 // Return the running worker to the API caller.
-                Ok(RunningLeaf(running_worker))
+                Ok(RunningLeaf {
+                    task: running_worker,
+                    opts: self.opts,
+                })
             }
         }
     }
@@ -348,8 +363,10 @@ impl Spec {
 }
 
 /// Represents a leaf node that has an existing spawned task in runtime.
-#[derive(Debug)]
-pub(crate) struct RunningLeaf(task::RunningTask<(), node::TerminationError>);
+pub(crate) struct RunningLeaf {
+    task: task::RunningTask<(), anyhow::Error, node::TerminationError>,
+    opts: Vec<Opt>,
+}
 
 impl RunningLeaf {
     /// Executes the termination logic of a `capataz::Node`. This method will
@@ -357,9 +374,13 @@ impl RunningLeaf {
     pub(crate) async fn terminate(
         self,
         mut ev_notifier: EventNotifier,
-    ) -> Result<(), TerminationError> {
-        let runtime_name = self.0.get_runtime_name().to_owned();
-        let result = self.0.terminate().await;
+    ) -> (Result<(), TerminationError>, Spec) {
+        let runtime_name = self.task.get_runtime_name().to_owned();
+        let (result, task_spec) = self.task.terminate().await;
+        let spec = Spec {
+            task_spec,
+            opts: self.opts,
+        };
         // Unfortunately, due to limitations of the mpsc API, we need to return
         // a general `node::TerminationError` from the task API. Because of
         // this, you'll see in the patterns bellow the usage of
@@ -375,7 +396,8 @@ impl RunningLeaf {
                         ev_notifier
                             .worker_termination_failed(&runtime_name, termination_err.clone())
                             .await;
-                        Err(TerminationError::TerminationFailed(termination_err))
+                        let termination_err = TerminationError::TerminationFailed(termination_err);
+                        (Err(termination_err), spec)
                     }
                     // The scenario bellow should never happen, as the body of a
                     // leaf node never returns `subtree::TerminationError`
@@ -397,7 +419,8 @@ impl RunningLeaf {
                 ev_notifier
                     .worker_termination_timed_out(&runtime_name, termination_err.clone())
                     .await;
-                Err(TerminationError::TerminationTimedOut(termination_err))
+                let termination_err = TerminationError::TerminationTimedOut(termination_err);
+                (Err(termination_err), spec)
             }
             // When the task panics, the task API returns this error. Transform
             // this signal to a TerminationPanicked error.
@@ -409,12 +432,13 @@ impl RunningLeaf {
                 ev_notifier
                     .worker_termination_panicked(&runtime_name, termination_err.clone())
                     .await;
-                Err(TerminationError::TerminationPanicked(termination_err))
+                let termination_err = TerminationError::TerminationPanicked(termination_err);
+                (Err(termination_err), spec)
             }
             // Happy path.
             Ok(_) => {
                 ev_notifier.worker_terminated(&runtime_name).await;
-                Ok(())
+                (Ok(()), spec)
             }
             // In the situation we get other kind of error, panic
             _ => {

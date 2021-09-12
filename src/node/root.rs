@@ -157,6 +157,7 @@ pub struct Opt(Box<dyn FnMut(&mut Spec) + Send + Sync + 'static>);
 ///
 /// Since: 0.0.0
 pub struct Root {
+    spec: Spec,
     running_subtree: subtree::RunningSubtree,
     ev_notifier: EventNotifier,
 }
@@ -167,8 +168,12 @@ impl Root {
     /// are terminated in the desired order.
     ///
     /// Since: 0.0.0
-    pub async fn terminate(self) -> Result<(), subtree::TerminationError> {
-        self.running_subtree.terminate(self.ev_notifier).await
+    pub async fn terminate(self) -> (Result<(), subtree::TerminationError>, Spec) {
+        let spec = self.spec;
+        // Every subtree restart re-creates all the child nodes, let us ignore
+        // the previously created subtree spec.
+        let (result, _subtree_spec) = self.running_subtree.terminate(self.ev_notifier).await;
+        (result, spec)
     }
 }
 
@@ -237,14 +242,15 @@ async fn start_child_nodes(
 
                 // When terminating children, some of them may have a
                 // termination failure, register them and bubble them up.
-                let termination_err: Option<subtree::TerminationError> = terminate_child_nodes(
+                let result = terminate_child_nodes(
                     ev_notifier.clone(),
                     runtime_name,
                     cleanup,
                     runtime_nodes,
                 )
-                .await
-                .err();
+                .await;
+
+                let termination_err: Option<subtree::TerminationError> = result.err();
 
                 let start_err =
                     subtree::StartError::start_failed(runtime_name, start_err, termination_err);
@@ -273,7 +279,9 @@ async fn terminate_child_nodes(
     // Terminate workers in reverse order.
     // TODO: take into account start order option.
     for node in nodes.into_iter().rev() {
-        if let Err(worker_err) = node.terminate(ev_notifier.clone()).await {
+        // Note, we do not return the node_specs as we do not need them again to
+        // restart.
+        if let (Err(worker_err), _node_spec) = node.terminate(ev_notifier.clone()).await {
             // Append error if child node failed to terminate.
             node_termination_errors.push(worker_err);
         }
@@ -584,7 +592,7 @@ impl Spec {
     ///
     /// Since: 0.0.0
     pub async fn start(
-        &self,
+        self,
         ctx: Context,
         ev_listener: EventListener,
     ) -> Result<Root, subtree::StartError> {
@@ -607,6 +615,7 @@ impl Spec {
             }
             Err(node::StartError::Subtree(start_err)) => Err(start_err),
             Ok(node::RunningNode::Subtree(running_subtree)) => Ok(Root {
+                spec: self,
                 running_subtree,
                 ev_notifier,
             }),

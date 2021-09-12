@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use thiserror::Error;
 
 use crate::context::Context;
@@ -122,7 +121,6 @@ impl NodeSpec {
 ///
 /// This type allows the unification of runtime representation for subtrees and
 /// leafs.
-#[derive(Debug)]
 pub(crate) enum RunningNode {
     Leaf(leaf::RunningLeaf),
     Subtree(subtree::RunningSubtree),
@@ -133,12 +131,19 @@ impl RunningNode {
     pub(crate) async fn terminate(
         self,
         ev_notifier: EventNotifier,
-    ) -> Result<(), TerminationError> {
+    ) -> (Result<(), TerminationError>, Node) {
         // Delegate the termination logic to leaf and subtree types.
         match self {
-            RunningNode::Leaf(leaf) => leaf.terminate(ev_notifier).await?,
-            RunningNode::Subtree(subtree) => subtree.terminate(ev_notifier).await?,
+            RunningNode::Leaf(leaf) => {
+                let (result, leaf_spec) = leaf.terminate(ev_notifier).await;
+                let result = result.map_err(TerminationError::Leaf);
+                (result, Node(NodeSpec::Leaf(leaf_spec)))
+            }
+            RunningNode::Subtree(subtree) => {
+                let (result, subtree_spec) = subtree.terminate(ev_notifier).await;
+                let result = result.map_err(TerminationError::Subtree);
+                (result, Node(NodeSpec::Subtree(subtree_spec)))
+            }
         }
-        Ok(())
     }
 }

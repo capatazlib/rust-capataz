@@ -148,8 +148,11 @@ pub(crate) struct Spec {
 }
 
 /// A subtree that has a spawned task executing at runtime.
-#[derive(Debug)]
-pub(crate) struct RunningSubtree(task::RunningTask<(), node::TerminationError>);
+pub(crate) struct RunningSubtree {
+    spec: root::Spec,
+    task: task::RunningTask<(), StartError, node::TerminationError>,
+    opts: Vec<leaf::Opt>,
+}
 
 impl Spec {
     pub(crate) fn new(spec: root::Spec, opts: Vec<leaf::Opt>) -> Self {
@@ -170,24 +173,36 @@ impl Spec {
         //
         // For more details see:
         // https://rust-lang.github.io/async-book/07_workarounds/04_recursion.html
-        let Self { spec, .. } = self;
-        async move {
-            // Get all metadata needed for the subtree task execution
-            let subtree_name = spec.get_name().to_owned();
-            let subtree_parent_name = parent_name.clone();
-            let subtree_ev_notifier = ev_notifier.clone();
+        let Self { spec, opts, .. } = self;
 
-            // Build an async task for the supervision tree.
+        // Clone all the required metadata to spawn a new node without
+        // invalidating variables.
+        let subtree_parent_name = parent_name.clone();
+        let subtree_name = spec.get_name().to_owned();
+        let subtree_ev_notifier = ev_notifier.clone();
+        let subtree_spec = spec.clone();
+
+        async move {
+            // Build task that contains the supervision tree logic.
             let task_spec = task::TaskSpec::new_with_start(
-                subtree_name,
-                move |ctx: Context, start_notifier: StartNotifier| async move {
-                    spec.run(
-                        ctx,
-                        subtree_ev_notifier.clone(),
-                        start_notifier,
-                        &subtree_parent_name,
-                    )
-                    .await
+                subtree_name.clone(),
+                move |ctx: Context, start_notifier: StartNotifier| {
+                    // Move ownership to the FnMut first, otherwise the compiler
+                    // complains with E0507.
+                    let subtree_spec = subtree_spec.clone();
+                    let subtree_ev_notifier = subtree_ev_notifier.clone();
+                    let subtree_parent_name = subtree_parent_name.clone();
+                    async move {
+                        // Finally, run the supervision tree logic.
+                        subtree_spec
+                            .run(
+                                ctx,
+                                subtree_ev_notifier,
+                                start_notifier,
+                                &subtree_parent_name,
+                            )
+                            .await
+                    }
                 },
             );
 
@@ -226,7 +241,11 @@ impl Spec {
                 // any errors
                 Ok(running_supervisor) => {
                     ev_notifier.supervisor_started(&runtime_name).await;
-                    Ok(RunningSubtree(running_supervisor))
+                    Ok(RunningSubtree {
+                        spec,
+                        opts,
+                        task: running_supervisor,
+                    })
                 }
             }
         }
@@ -239,9 +258,15 @@ impl RunningSubtree {
     pub(crate) async fn terminate(
         self,
         mut ev_notifier: EventNotifier,
-    ) -> Result<(), TerminationError> {
-        let runtime_name = self.0.get_runtime_name().to_owned();
-        let result = self.0.terminate().await;
+    ) -> (Result<(), TerminationError>, Spec) {
+        let runtime_name = self.task.get_runtime_name().to_owned();
+        // Discard the previous task_spec as the capataz recreates the
+        // supervision tree node using the provided build nodes function.
+        let (result, _task_spec) = self.task.terminate().await;
+        let spec = Spec {
+            spec: self.spec,
+            opts: self.opts,
+        };
 
         // Unfortunately, due to limitations of the mpsc API, we need to return
         // a general `node::TerminationError` from the task API. Because of
@@ -252,7 +277,7 @@ impl RunningSubtree {
             // Ignore this case as the error has been notified elsewhere.
             Err(task::TerminationError::TaskFailureNotified { .. }) => {
                 let termination_err = TerminationError::StartErrorAlreadyReported.into();
-                Err(termination_err)
+                (Err(termination_err), spec)
             }
             // SAFETY: This will never happen because supervisors are never aborted
             Err(task::TerminationError::TaskAborted { .. }) => {
@@ -276,7 +301,8 @@ impl RunningSubtree {
                         ev_notifier
                             .supervisor_termination_failed(&runtime_name, termination_err.clone())
                             .await;
-                        Err(TerminationError::TerminationFailed(termination_err))
+                        let termination_err = TerminationError::TerminationFailed(termination_err);
+                        (Err(termination_err), spec)
                     }
                     other_err => {
                         // SAFETY: The scenario bellow should never happen, as the task body never
@@ -291,7 +317,7 @@ impl RunningSubtree {
             // The supervisor was terminated without any errors.
             Ok(_) => {
                 ev_notifier.supervisor_terminated(&runtime_name).await;
-                Ok(())
+                (Ok(()), spec)
             }
         }
     }

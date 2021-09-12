@@ -102,9 +102,9 @@ mod tests {
             .await
             .expect("supervisor should start with no error");
 
-        sup.terminate()
-            .await
-            .expect("supervisor should terminate without errors");
+        let (result, _spec) = sup.terminate().await;
+
+        result.expect("supervisor should terminate without errors");
 
         ev_buffer
             .wait_till(
@@ -178,7 +178,7 @@ mod tests {
         // Wait more than the max termination duration
         time::advance(time::Duration::from_secs(2)).await;
 
-        let result = termination.await;
+        let (result, _spec) = termination.await;
         match result {
             Err(termination_err) => assert_eq!(
                 "supervisor failed to terminate",
@@ -222,9 +222,9 @@ mod tests {
             .await
             .expect("supervisor should start with no error");
 
-        sup.terminate()
-            .await
-            .expect("supervisor should terminate without errors");
+        let (result, _spec) = sup.terminate().await;
+
+        result.expect("supervisor should terminate without errors");
 
         ev_buffer
             .wait_till(
@@ -344,10 +344,8 @@ mod tests {
             .await
             .expect("supervisor should start without errors");
 
-        let termination_err = sup
-            .terminate()
-            .await
-            .expect_err("supervisor should terminate with error");
+        let (result, _spec) = sup.terminate().await;
+        let termination_err = result.expect_err("supervisor should terminate with error");
 
         assert_eq!(
             "supervisor failed to terminate",
@@ -388,9 +386,8 @@ mod tests {
             .await
             .expect("supervisor should start with no error");
 
-        sup.terminate()
-            .await
-            .expect("supervisor should terminate without errors");
+        let (result, _spec) = sup.terminate().await;
+        result.expect("supervisor should terminate without errors");
 
         // Wait till /root has terminated to get right assertion of events
         ev_buffer
@@ -430,9 +427,8 @@ mod tests {
             .await
             .expect("supervisor should start with no error");
 
-        sup.terminate()
-            .await
-            .expect_err("supervisor should terminate without errors");
+        let (result, _spec) = sup.terminate().await;
+        let _ = result.expect_err("supervisor should terminate without errors");
 
         // Wait till /root has terminated to get right assertion of events
         ev_buffer
@@ -530,9 +526,8 @@ mod tests {
             .await
             .expect("supervisor should start with no error");
 
-        sup.terminate()
-            .await
-            .expect("supervisor should terminate without errors");
+        let (result, _spec) = sup.terminate().await;
+        result.expect("supervisor should terminate without errors");
 
         // Wait till /root has terminated to get right assertion of events
         ev_buffer
@@ -593,14 +588,14 @@ mod tests {
             .await;
     }
 
-    /*
-    #[tokio::test]
-    async fn test_single_level_worker_permanent_restart()
+    // /*
+    // #[tokio::test]
+    // async fn test_single_level_worker_permanent_restart()
 
-    #[tokio::test]
-    async fn test_single_level_worker_transient_restart()
+    // #[tokio::test]
+    // async fn test_single_level_worker_transient_restart()
 
-    #[tokio::test]
-    async fn test_single_level_worker_temporary_restart()
-    */
+    // #[tokio::test]
+    // async fn test_single_level_worker_temporary_restart()
+    // */
 }
