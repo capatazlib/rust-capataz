@@ -68,17 +68,10 @@ pub enum Startup {
 /// Represents a task specification; it serves as a template for the
 /// construction of tasks.
 pub struct TaskSpec<A, SE, TE> {
-    name: String,
     startup: Startup,
     shutdown: Shutdown,
     routine:
         Box<dyn (FnMut(Context, StartNotifier<SE>) -> BoxFuture<'static, Result<A, TE>>) + Send>,
-}
-
-#[derive(Debug)]
-/// Represents the information of the failing task
-pub struct TaskInfo {
-    runtime_name: String,
 }
 
 /// Error that can be reported back when terminating a RunningTask
@@ -90,16 +83,16 @@ where
     /// Indicates the task did not respect the shutdown mechanism and had to
     /// be force-killed.
     #[error("task was hard killed after timeout")]
-    TaskForcedKilled { info: TaskInfo },
+    TaskForcedKilled,
     /// Indicates the task was cancelled.
     #[error("task was aborted")]
-    TaskAborted { info: TaskInfo },
+    TaskAborted,
     /// Indicates the task had an error before it terminated.
     #[error("task runtime failed: {err:?}")]
-    TaskFailed { info: TaskInfo, err: E },
+    TaskFailed { err: E },
     /// Indicates the task had a panic while on runtime.
     #[error("task panicked at runtime")]
-    TaskPanic { info: TaskInfo },
+    TaskPanic,
     /// Returned when the failure has already been reported to error listener
     #[error("should never see this error message")]
     TaskFailureNotified,
@@ -110,7 +103,6 @@ pub struct RunningTask<A, SE, TE>
 where
     TE: fmt::Debug,
 {
-    runtime_name: String,
     join_handle: JoinHandle<Result<A, TerminationError<TE>>>,
     termination_handle: future::AbortHandle,
     kill_handle: future::AbortHandle,
@@ -126,21 +118,17 @@ where
     /// Internal implementation of the wait logic used in both the `wait` and
     /// `terminate` methods.
     async fn wait_handle(
-        runtime_name: &str,
         join_handle: JoinHandle<Result<A, TerminationError<TE>>>,
     ) -> Result<A, TerminationError<TE>> {
         // await for the RunningTask routine result; the result is going to be
         // wrapped by a Result created from the JoinHandle API.
-        let runtime_name = runtime_name.to_owned();
         let join_result = join_handle.await;
         match join_result {
             // JoinHandle Error.
             Err(join_error) => {
                 if join_error.is_panic() {
                     // Caused when the task panicked.
-                    Err(TerminationError::TaskPanic {
-                        info: TaskInfo { runtime_name },
-                    })
+                    Err(TerminationError::TaskPanic {})
                 } else {
                     // The `JoinHandle` was dropped or the `JoinHandle.abort`
                     // method was called explicitly. The current implementation
@@ -156,15 +144,15 @@ where
     }
 
     /// Waits for the task task to finish indefinitely.
-    pub(crate) async fn wait(self) -> Result<A, TerminationError<TE>> {
-        Self::wait_handle(&self.runtime_name, self.join_handle).await
+    pub(crate) async fn wait(self) -> (Result<A, TerminationError<TE>>, TaskSpec<A, SE, TE>) {
+        let result = Self::wait_handle(self.join_handle).await;
+        (result, self.spec)
     }
 
     /// Executes the abort logic of the routine and then waits for a specified
     /// duration of time before it kills the task.
     pub(crate) async fn terminate(self) -> (Result<A, TerminationError<TE>>, TaskSpec<A, SE, TE>) {
         let Self {
-            runtime_name,
             kill_handle,
             join_handle,
             termination_handle,
@@ -178,7 +166,7 @@ where
 
         // Handle the JoinHandle API result once for Indefinitely and Timeout
         // shutdown branches.
-        let wait_result = Self::wait_handle(&runtime_name, join_handle);
+        let wait_result = Self::wait_handle(join_handle);
 
         let task_result = match &spec.shutdown {
             // Wait for a duration of time
@@ -191,9 +179,7 @@ where
                         // Timeout duration has been reached, force-kill the
                         // routine.
                         kill_handle.abort();
-                        Err(TerminationError::TaskForcedKilled {
-                            info: TaskInfo { runtime_name: runtime_name.clone() },
-                        })
+                        Err(TerminationError::TaskForcedKilled)
                     }
                     join_result = wait_result => {
                         // Task finished before the timeout, return result
@@ -208,14 +194,12 @@ where
         (task_result, spec)
     }
 
-    pub(crate) fn get_runtime_name(&self) -> &str {
-        &self.runtime_name
+    /// Executes the abort logic of the routine and then waits for a specified
+    /// duration of time before it kills the task. It does not return the
+    /// creating `TaskSpec`.
+    pub(crate) async fn terminate_(self) -> Result<A, TerminationError<TE>> {
+        self.terminate().await.0
     }
-}
-
-/// Builds a `RunningTask` runtime name.
-pub(crate) fn build_runtime_name(parent_name: &str, name: &str) -> String {
-    format!("{}/{}", parent_name, name)
 }
 
 type TerminationNotifier<TE> = notifier::TerminationNotifier<TerminationError<TE>>;
@@ -249,20 +233,17 @@ where
     /// This call will cause the whole supervision system start procedure to
     /// abort and fail fast.
     ///
-    pub fn new_with_start<S, F, O>(name: S, mut routine: F) -> Self
+    pub fn new_with_start<F, O>(mut routine: F) -> Self
     where
-        S: Into<String>,
         F: (FnMut(Context, StartNotifier<SE>) -> O) + Send + 'static,
         O: future::Future<Output = Result<A, TE>> + FutureExt + Send + Sized + 'static,
     {
         let routine =
             move |ctx: Context, on_start: StartNotifier<SE>| routine(ctx, on_start).boxed();
         TaskSpec {
-            name: name.into(),
             startup: Startup::Indefinitely,
             shutdown: Shutdown::Indefinitely,
             routine: Box::new(routine),
-            // restart: Restart::Permanent,
         }
     }
 
@@ -292,19 +273,14 @@ where
     pub(crate) async fn start(
         self,
         parent_ctx: &Context,
-        parent_name: &str,
         parent_chan: Option<TerminationNotifier<TE>>,
-    ) -> Result<RunningTask<A, SE, TE>, StartError<SE>> {
+    ) -> Result<RunningTask<A, SE, TE>, (StartError<SE>, TaskSpec<A, SE, TE>)> {
         let Self {
-            name,
             mut routine,
             startup,
             shutdown,
             ..
         } = self;
-
-        let runtime_name = build_runtime_name(parent_name, &name);
-        let task_runtime_name = runtime_name.clone();
 
         // Create the notification channel that allow users of this API to
         // signal capataz that the task started.
@@ -324,11 +300,7 @@ where
             let task_result = task_routine.await;
             match task_result {
                 Err(_) => {
-                    let termination_err = TaskAborted {
-                        info: TaskInfo {
-                            runtime_name: task_runtime_name.clone(),
-                        },
-                    };
+                    let termination_err = TaskAborted;
                     if let Some(ref parent_chan) = &parent_chan {
                         parent_chan.report(termination_err).await?;
                         Err(TaskFailureNotified)
@@ -337,12 +309,7 @@ where
                     }
                 }
                 Ok(Err(err)) => {
-                    let termination_err = TaskFailed {
-                        info: TaskInfo {
-                            runtime_name: task_runtime_name.clone(),
-                        },
-                        err,
-                    };
+                    let termination_err = TaskFailed { err };
                     if let Some(ref parent_chan) = &parent_chan {
                         parent_chan.report(termination_err).await?;
                         Err(TaskFailureNotified)
@@ -357,15 +324,25 @@ where
         // Perform the future asynchronously in a new task.
         let join_handle = task::spawn(task_routine);
 
-        use StartError::*;
+        // Recreate the spec again
+        let spec = TaskSpec {
+            startup: startup.clone(),
+            shutdown,
+            routine,
+        };
+
         // Wait for the result of the task via the notification channel.
+        use StartError::*;
         let start_result = match startup {
             Startup::Indefinitely => start_rx.await,
             Startup::Timeout(start_timeout) => {
                 match time::timeout(start_timeout, start_rx).await {
                     // RunningTask took to long to get started. Short-circuit
                     // with a timeout error.
-                    Err(start_timeout_err) => return Err(StartTimeoutError(start_timeout_err)),
+                    Err(start_timeout_err) => {
+                        let start_timeout_err = StartTimeoutError(start_timeout_err);
+                        return Err((start_timeout_err, spec));
+                    }
                     Ok(start_result) => start_result,
                 }
             }
@@ -373,33 +350,44 @@ where
 
         match start_result {
             // Oneshot API failed to receive message.
-            Err(start_sender_err) => Err(StartRecvError(start_sender_err)),
+            Err(start_sender_err) => {
+                let start_sender_err = StartRecvError(start_sender_err);
+                Err((start_sender_err, spec))
+            }
             // API client signals a start error.
-            Ok(Err(task_start_err)) => Err(BusinessLogicFailed(task_start_err)),
+            Ok(Err(task_start_err)) => {
+                let task_start_err = BusinessLogicFailed(task_start_err);
+                Err((task_start_err, spec))
+            }
             // Everything went Ok.
             Ok(Ok(())) => Ok(RunningTask {
-                runtime_name,
                 join_handle,
                 termination_handle,
                 kill_handle,
-
-                // Recreate the spec again
-                spec: TaskSpec {
-                    name,
-                    startup,
-                    shutdown,
-                    routine,
-                },
+                spec,
             }),
         }
     }
 
-    pub(crate) fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    pub(crate) fn build_runtime_name(&self, parent_name: &str) -> String {
-        format!("{}/{}", parent_name, self.name)
+    /// Spawns a new task that executes this `TaskSpec`'s routine `Future`.
+    ///
+    /// ### Blocking on start function
+    ///
+    /// This function will block and wait until a notification from the start
+    /// function (executing on a newly spawned routine) is received; this
+    /// notification indicates if the start was successful or not.
+    ///
+    /// This blocking is necessary to ensure that supervised trees get spawned
+    /// in the specified/expected order.
+    ///
+    pub(crate) async fn start_(
+        self,
+        parent_ctx: &Context,
+        parent_chan: Option<TerminationNotifier<TE>>,
+    ) -> Result<RunningTask<A, SE, TE>, StartError<SE>> {
+        self.start(parent_ctx, parent_chan)
+            .await
+            .map_err(|(err, _)| err)
     }
 }
 
@@ -419,7 +407,6 @@ mod tests {
     #[tokio::test]
     async fn test_task_start_ok() {
         let task: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 notify.success();
                 let _ = ctx.done().await;
@@ -431,7 +418,7 @@ mod tests {
 
         let ctx = Context::new();
 
-        let result = task.start(&ctx, "caller", Some(sender)).await;
+        let result = task.start_(&ctx, Some(sender)).await;
         match result {
             Ok(task) => {
                 let _ = task.terminate();
@@ -445,7 +432,6 @@ mod tests {
     #[tokio::test]
     async fn test_task_start_with_notify_failed_routine() {
         let task: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |_ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 let err = anyhow!("task start failure");
                 notify.failed(err);
@@ -457,7 +443,7 @@ mod tests {
 
         let ctx = Context::new();
 
-        let result = task.start(&ctx, "caller", Some(sender)).await;
+        let result = task.start_(&ctx, Some(sender)).await;
         match result {
             Ok(task) => {
                 let _ = task.terminate();
@@ -477,7 +463,6 @@ mod tests {
         time::pause();
 
         let mut task: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 let _ = ctx.done().await;
                 notify.success();
@@ -489,7 +474,7 @@ mod tests {
         let sender = TerminationNotifier::from_mpsc(sender);
 
         let ctx = Context::new();
-        let result_fut = task.start(&ctx, "caller", Some(sender));
+        let result_fut = task.start_(&ctx, Some(sender));
 
         time::advance(time::Duration::from_secs(5)).await;
 
@@ -511,7 +496,6 @@ mod tests {
         time::pause();
 
         let task: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, _notify: task::StartNotifier<anyhow::Error>| async move {
                 let _ = ctx.done().await;
                 Ok(())
@@ -521,7 +505,7 @@ mod tests {
         let sender = TerminationNotifier::from_mpsc(sender);
 
         let ctx = Context::new();
-        let result_fut = task.start(&ctx, "caller", Some(sender));
+        let result_fut = task.start_(&ctx, Some(sender));
 
         time::advance(time::Duration::from_secs(5)).await;
 
@@ -542,7 +526,6 @@ mod tests {
     async fn test_task_termination_kill() {
         time::pause();
         let mut task_spec: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 let inner_ctx = Context::new();
                 // wait forever
@@ -557,7 +540,7 @@ mod tests {
         let sender = TerminationNotifier::from_mpsc(sender);
 
         let ctx = Context::new();
-        let result = task_spec.start(&ctx, "caller", Some(sender)).await;
+        let result = task_spec.start_(&ctx, Some(sender)).await;
 
         let task = match result {
             Err(start_err) => {
@@ -590,7 +573,6 @@ mod tests {
     async fn test_task_termination_with_no_error() {
         time::pause();
         let mut task_spec: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 notify.success();
                 let _ = ctx.done().await;
@@ -603,7 +585,7 @@ mod tests {
 
         let ctx = Context::new();
         let task = task_spec
-            .start(&ctx, "caller", Some(sender))
+            .start_(&ctx, Some(sender))
             .await
             .expect("task should start without errors");
 
@@ -622,7 +604,6 @@ mod tests {
     async fn test_task_termination_with_error() {
         time::pause();
         let mut task_spec: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 notify.success();
                 let _ = ctx.done().await;
@@ -635,7 +616,7 @@ mod tests {
 
         let ctx = Context::new();
         let task = task_spec
-            .start(&ctx, "caller", Some(sender))
+            .start_(&ctx, Some(sender))
             .await
             .expect("task should start without errors");
 
@@ -664,7 +645,6 @@ mod tests {
     #[tokio::test]
     async fn test_double_start_ok() {
         let task_spec: TaskSpec = task::TaskSpec::new_with_start(
-            "task",
             |ctx: Context, notify: task::StartNotifier<anyhow::Error>| async move {
                 notify.success();
                 let _ = ctx.done().await;
@@ -676,7 +656,7 @@ mod tests {
 
         let ctx = Context::new();
 
-        let result = task_spec.start(&ctx, "caller", Some(sender)).await;
+        let result = task_spec.start_(&ctx, Some(sender)).await;
         let task_spec = match result {
             Err(start_err) => {
                 assert!(
@@ -704,7 +684,7 @@ mod tests {
         let (sender, _) = mpsc::channel(100);
         let sender = TerminationNotifier::from_mpsc(sender);
 
-        let result = task_spec.start(&ctx, "caller", Some(sender)).await;
+        let result = task_spec.start_(&ctx, Some(sender)).await;
         match result {
             Err(start_err) => {
                 assert!(

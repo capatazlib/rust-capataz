@@ -535,6 +535,26 @@ impl EventAssert {
         }))
     }
 
+    // pub fn worker_failed(input_name0: &str) -> EventAssert {
+    //     let input_name = input_name0.to_owned();
+    //     EventAssert(Box::new(move |ev| match &ev {
+    //         Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
+    //             if runtime_name != &*input_name {
+    //                 Some(format!(
+    //                     "Expecting WorkerStartTimedOut with name {}; got {:?} instead",
+    //                     input_name, ev
+    //                 ))
+    //             } else {
+    //                 None
+    //             }
+    //         }
+    //         _ => Some(format!(
+    //             "Expecting WorkerStartTimedOut; got {:?} instead",
+    //             ev
+    //         )),
+    //     }))
+    // }
+
     /// Asserts that an `Event` is of value `WorkerTerminated` with the specified
     /// worker name.
     pub fn worker_terminated(input_name0: &str) -> EventAssert {

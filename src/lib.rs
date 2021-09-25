@@ -42,7 +42,11 @@ pub use events::{EventAssert, EventBufferCollector};
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use anyhow::anyhow;
+    use futures::future::{BoxFuture, FutureExt};
+    use tokio::sync::{mpsc, Mutex};
     use tokio::time;
 
     use crate::context::Context;
@@ -90,6 +94,145 @@ mod tests {
         Worker::new(name, opts, |_ctx: Context| async move {
             futures::future::pending().await
         })
+    }
+
+    struct Signaler {
+        sender: mpsc::Sender<()>,
+        receiver: Arc<Mutex<mpsc::Receiver<()>>>,
+    }
+
+    impl Signaler {
+        pub(crate) fn new() -> Self {
+            let (sender, receiver) = mpsc::channel(10);
+            Self {
+                sender,
+                receiver: Arc::new(Mutex::new(receiver)),
+            }
+        }
+
+        pub(crate) async fn send_signal(&self) {
+            let _ = self.sender.send(()).await;
+        }
+
+        pub(crate) async fn wait_signal(&mut self) {
+            let mut receiver = self.receiver.lock().await;
+            let _ = receiver.recv().await;
+        }
+    }
+
+    impl Clone for Signaler {
+        fn clone(&self) -> Self {
+            Self {
+                sender: self.sender.clone(),
+                receiver: self.receiver.clone(),
+            }
+        }
+    }
+
+    fn fail_runtime_worker0(
+        name: &str,
+        opts: Vec<WorkerOpt>,
+        max_fail_count: i32,
+    ) -> (Node, impl FnMut() -> BoxFuture<'static, ()>) {
+        // Create the communication channel that will signal start/end of
+        // failures inside a task
+        let (sender, receiver) = mpsc::channel(10);
+
+        // Transform the sender in a callback that the API client can use; abstracting
+        // away the fact we are using mpsc::Sender
+        let fail_signal_sender = sender.clone();
+        let send_fail_signal = move || {
+            let sender = fail_signal_sender.clone();
+            async move {
+                let _ = sender.send(()).await;
+            }
+            .boxed()
+        };
+
+        // Given that receiver needs to be called multiple times because
+        // of FnMut constraints on the Worker, we wrap the mpsc::Receiver in
+        // an Arc/Mutex.
+        let wait_for_fail_signal = Arc::new(Mutex::new(receiver));
+
+        // Keep track of all the failures that have happened so far
+        let fail_count = Arc::new(Mutex::new(0));
+
+        // Build the worker that we are going to use for tests
+        let node = Worker::new(name, opts, move |ctx: Context| {
+            // Clone the wait_for_fail_signal receiver inside the Lambda
+            let wait_for_fail_signal = wait_for_fail_signal.clone();
+            let fail_count = fail_count.clone();
+            async move {
+                // If the fail_count has reached the max_fail_count, wait for termination
+                // of the given Contet.
+                let mut fail_count_ref = fail_count.lock().await;
+
+                if *fail_count_ref >= max_fail_count {
+                    let _ = ctx.done().await;
+                    return Ok(());
+                }
+                // Otherwise, block the thread waiting for the API client to signal
+                // an error should happen.
+                let mut wait_for_fail_signal = wait_for_fail_signal.lock().await;
+                wait_for_fail_signal.recv().await;
+                std::mem::drop(wait_for_fail_signal);
+
+                // Increase the fail count after waiting for the first failure.
+                *fail_count_ref += 1;
+
+                Err(anyhow!(
+                    "fail_runtime_worker ({}/{})",
+                    *fail_count_ref,
+                    max_fail_count
+                ))
+            }
+        });
+        (node, send_fail_signal)
+    }
+
+    fn fail_runtime_worker(
+        name: &str,
+        opts: Vec<WorkerOpt>,
+        max_fail_count: i32,
+        signaler: Signaler,
+    ) -> Node {
+        // Keep track of all the failures that have happened so far on a shared
+        // reference.
+        let fail_count = Arc::new(Mutex::new(0));
+
+        // Build the worker that we are going to use for tests
+        let node = Worker::new(name, opts, move |ctx: Context| {
+            // Clone the signaler for every time we return a new worker routine
+            let mut signaler = signaler.clone();
+            // Clone the shared failure count reference for every worker
+            // instance.
+            let fail_count = fail_count.clone();
+
+            async move {
+                // If the fail_count has reached the max_fail_count, wait for termination
+                // of the given Context.
+                let mut fail_count_ref = fail_count.lock().await;
+
+                if *fail_count_ref >= max_fail_count {
+                    let _ = ctx.done().await;
+                    return Ok(());
+                }
+
+                // Otherwise, block the thread waiting for the API client to signal
+                // an error should happen.
+                signaler.wait_signal().await;
+
+                // Increase the fail count after waiting for the first failure.
+                *fail_count_ref += 1;
+
+                Err(anyhow!(
+                    "fail_runtime_worker ({}/{})",
+                    *fail_count_ref,
+                    max_fail_count
+                ))
+            }
+        });
+        node
     }
 
     #[tokio::test]
@@ -588,14 +731,82 @@ mod tests {
             .await;
     }
 
-    // /*
-    // #[tokio::test]
-    // async fn test_single_level_worker_permanent_restart()
+    #[tokio::test]
+    async fn test_single_level_worker_permanent_restart() {
+        let signaler = Signaler::new();
+        let root_signaler = signaler.clone();
 
-    // #[tokio::test]
-    // async fn test_single_level_worker_transient_restart()
+        let spec = SupervisorSpec::new("root", vec![], move || {
+            // clone the signaler reference every time we restart the
+            // supervision tree. In this test-case it should happen only once.
+            let signaler = root_signaler.clone();
+            let max_err_count = 1;
 
-    // #[tokio::test]
-    // async fn test_single_level_worker_temporary_restart()
-    // */
+            let worker = fail_runtime_worker("worker", vec![], max_err_count, signaler);
+
+            vec![worker]
+        });
+
+        let (ev_listener, mut ev_buffer) = EventListener::new_testing_listener().await;
+        let sup = spec
+            .start(Context::new(), ev_listener)
+            .await
+            .expect("supervisor should start with no error");
+
+        // Wait till the event buffer has collected the supervisor root started
+        // event.
+        ev_buffer
+            .wait_till(
+                EventAssert::supervisor_started("/root"),
+                std::time::Duration::from_millis(250),
+            )
+            .await
+            .expect("supervisor should have started");
+
+        // Send a signal to the fail_runtime_worker to return a runtime error.
+        signaler.send_signal().await;
+
+        // Wait for the worker restart to propagate on the event buffer.
+        ev_buffer
+            .wait_till(
+                EventAssert::worker_started("/root/worker"),
+                std::time::Duration::from_millis(250),
+            )
+            .await
+            .expect("worker should have re-started");
+
+        // Now, terminate the supervision tree, the test has concluded.
+        let (result, _spec) = sup.terminate().await;
+
+        // Wait for the root supervisor to report it has finished.
+        ev_buffer
+            .wait_till(
+                EventAssert::supervisor_terminated("/root"),
+                std::time::Duration::from_millis(250),
+            )
+            .await
+            .expect("supervisor should have terminated");
+
+        result.expect("supervisor should terminate without errors");
+
+        // Assert events happened in the correct order.
+        ev_buffer
+            .assert_exact(vec![
+                EventAssert::worker_started("/root/worker"),
+                EventAssert::supervisor_started("/root"),
+                EventAssert::worker_termination_failed("/root/worker"),
+                EventAssert::worker_started("/root/worker"),
+                EventAssert::worker_terminated("/root/worker"),
+                EventAssert::supervisor_terminated("/root"),
+            ])
+            .await;
+    }
+
+    // // /*
+    // // #[tokio::test]
+    // // async fn test_single_level_worker_transient_restart()
+
+    // // #[tokio::test]
+    // // async fn test_single_level_worker_temporary_restart()
+    // // */
 }

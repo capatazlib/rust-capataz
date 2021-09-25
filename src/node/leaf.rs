@@ -156,8 +156,10 @@ impl TerminationError {
 ///
 /// Since: 0.0.0
 pub struct Spec {
-    task_spec: task::TaskSpec<(), anyhow::Error, node::TerminationError>,
+    name: String,
     opts: Vec<Opt>,
+    task_spec: task::TaskSpec<(), anyhow::Error, node::TerminationError>,
+    restart_strategy: node::Restart,
 }
 
 /// Represents a configuration option for a `capataz::Node` of type worker.
@@ -175,11 +177,10 @@ pub struct Opt(
 impl Spec {
     /// Transforms a general business logic error into a TerminationError that
     /// later can be handled by a subtree node (Supervisor).
-    fn to_leaf_error(termination_err: anyhow::Error) -> node::TerminationError {
+    fn to_leaf_error(runtime_name: &str, termination_err: anyhow::Error) -> node::TerminationError {
         node::TerminationError::Leaf(TerminationError::TerminationFailed(Arc::new(
             TerminationFailed {
-                // TODO: solve this predicament
-                runtime_name: "".to_owned(),
+                runtime_name: runtime_name.to_owned(),
                 termination_err,
             },
         )))
@@ -209,23 +210,32 @@ impl Spec {
         O: Future<Output = Result<(), anyhow::Error>> + FutureExt + Send + Sized + 'static,
     {
         let f_lock = Arc::new(Mutex::new(f));
-        let mut task_spec = task::TaskSpec::new_with_start(
-            name,
-            move |ctx: Context, start_notifier: StartNotifier| {
+        let name = name.into();
+        let task_name = name.clone();
+        let mut task_spec =
+            task::TaskSpec::new_with_start(move |ctx: Context, start_notifier: StartNotifier| {
+                let parent_name = ctx.get_parent_name();
+                let runtime_name = node::build_runtime_name(parent_name, &task_name);
                 let f_lock = f_lock.clone();
                 async move {
                     let mut f = f_lock.lock().await;
                     start_notifier.success();
-                    f(ctx).await.map_err(Spec::to_leaf_error)
+                    f(ctx)
+                        .await
+                        .map_err(|err| Spec::to_leaf_error(&runtime_name, err))
                 }
-            },
-        );
+            });
 
         for opt_fn in &mut opts {
             opt_fn.0(&mut task_spec);
         }
 
-        node::Node(node::NodeSpec::Leaf(Spec { task_spec, opts }))
+        node::Node(node::NodeSpec::Leaf(Spec {
+            name,
+            task_spec,
+            opts,
+            restart_strategy: node::Restart::OneForOne,
+        }))
     }
 
     /// Creates the specification of a worker `capataz::Node` (leaf node) in the
@@ -248,21 +258,30 @@ impl Spec {
         O: Future<Output = Result<(), anyhow::Error>> + FutureExt + Send + Sized + 'static,
     {
         let f_lock = Arc::new(Mutex::new(f));
-        let mut task_spec = task::TaskSpec::new_with_start(
-            name,
-            move |ctx: Context, start_notifier: StartNotifier| {
+        let name = name.into();
+        let task_name = name.clone();
+        let mut task_spec =
+            task::TaskSpec::new_with_start(move |ctx: Context, start_notifier: StartNotifier| {
                 let f_lock = f_lock.clone();
+                let parent_name = ctx.get_parent_name();
+                let runtime_name = node::build_runtime_name(parent_name, &task_name);
                 async move {
                     let mut f = f_lock.lock().await;
-                    f(ctx, start_notifier).await.map_err(Spec::to_leaf_error)
+                    f(ctx, start_notifier)
+                        .await
+                        .map_err(|err| Spec::to_leaf_error(&runtime_name, err))
                 }
-            },
-        );
+            });
 
         for opt_fn in &mut opts {
             opt_fn.0(&mut task_spec);
         }
-        node::Node(node::NodeSpec::Leaf(Spec { task_spec, opts }))
+        node::Node(node::NodeSpec::Leaf(Spec {
+            name,
+            restart_strategy: node::Restart::OneForOne,
+            task_spec,
+            opts,
+        }))
     }
 
     /// Executes the bootstrap logic for a leaf node. This method will spawn a
@@ -274,25 +293,29 @@ impl Spec {
         mut ev_notifier: EventNotifier,
         parent_name: &str,
         termination_notifier: TerminationNotifier,
-    ) -> Result<RunningLeaf, StartError> {
-        let runtime_name = self.task_spec.build_runtime_name(parent_name);
+    ) -> Result<RunningLeaf, (StartError, Self)> {
+        let Self {
+            name,
+            opts,
+            task_spec,
+            restart_strategy,
+        } = self;
+
+        let runtime_name = node::build_runtime_name(parent_name, &name);
 
         // Spawn the supervised task.
-        let result = self
-            .task_spec
-            .start(&ctx, parent_name, Some(termination_notifier))
-            .await;
+        let result = task_spec.start(&ctx, Some(termination_notifier)).await;
 
         match result {
             // SAFETY: The only way this error occurs is if we implemented the
             // supervision logic wrong.
-            Err(task::StartError::StartRecvError(_)) => {
+            Err((task::StartError::StartRecvError(_), _)) => {
                 unreachable!("invalid implementation; supervisors always listen to channel")
             }
             // The supervised task took too long to signal a start happened, so
             // we return a StartError to our parent node, this will ultimately
             // result in the `SupervisorSpec` start method to fail.
-            Err(task::StartError::StartTimeoutError(_)) => {
+            Err((task::StartError::StartTimeoutError(_), task_spec)) => {
                 let start_err = Arc::new(StartTimedOut {
                     runtime_name: runtime_name.clone(),
                 });
@@ -304,12 +327,18 @@ impl Spec {
 
                 // Return the start error to the API caller.
                 let start_err = StartError::StartTimedOut(start_err);
-                Err(start_err)
+                let spec = Spec {
+                    name,
+                    opts,
+                    task_spec,
+                    restart_strategy,
+                };
+                Err((start_err, spec))
             }
             // API consumer signaled via the `StartNotifier` that the Worker
             // could not initialize correctly, this usually means the API
             // consumer was not able to allocate a required resource.
-            Err(task::StartError::BusinessLogicFailed(start_err)) => {
+            Err((task::StartError::BusinessLogicFailed(start_err), task_spec)) => {
                 let start_err = Arc::new(StartFailed {
                     runtime_name: runtime_name.clone(),
                     start_err,
@@ -320,7 +349,13 @@ impl Spec {
                     .worker_start_failed(&runtime_name, start_err.clone())
                     .await;
                 // Return the start error to the API caller.
-                Err(StartError::StartFailed(start_err))
+                let spec = Spec {
+                    name,
+                    opts,
+                    task_spec,
+                    restart_strategy,
+                };
+                Err((StartError::StartFailed(start_err), spec))
             }
             Ok(running_worker) => {
                 // Signal the event system that the worker started without
@@ -328,11 +363,18 @@ impl Spec {
                 ev_notifier.worker_started(&runtime_name).await;
                 // Return the running worker to the API caller.
                 Ok(RunningLeaf {
+                    name,
+                    runtime_name,
                     task: running_worker,
-                    opts: self.opts,
+                    opts,
+                    restart_strategy,
                 })
             }
         }
+    }
+
+    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
+        &self.restart_strategy
     }
 
     /// Specifies how long a client API is willing to wait for the start of this
@@ -364,23 +406,57 @@ impl Spec {
 
 /// Represents a leaf node that has an existing spawned task in runtime.
 pub(crate) struct RunningLeaf {
+    name: String,
+    runtime_name: String,
     task: task::RunningTask<(), anyhow::Error, node::TerminationError>,
     opts: Vec<Opt>,
+    restart_strategy: node::Restart,
+}
+
+/// Internal value to allow RunningLeaf to implement the Debug trait
+#[derive(Debug)]
+struct RunningLeafDebug {
+    name: String,
+    runtime_name: String,
+    restart_strategy: node::Restart,
+}
+
+impl std::fmt::Debug for RunningLeaf {
+    fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let data = RunningLeafDebug {
+            name: self.name.clone(),
+            runtime_name: self.runtime_name.clone(),
+            restart_strategy: self.restart_strategy.clone(),
+        };
+        data.fmt(format)
+    }
 }
 
 impl RunningLeaf {
+    pub(crate) fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+
     /// Executes the termination logic of a `capataz::Node`. This method will
     /// block until the spawned task is guaranteed to be terminated.
     pub(crate) async fn terminate(
         self,
         mut ev_notifier: EventNotifier,
     ) -> (Result<(), TerminationError>, Spec) {
-        let runtime_name = self.task.get_runtime_name().to_owned();
+        let runtime_name = self.runtime_name.clone();
+
         let (result, task_spec) = self.task.terminate().await;
         let spec = Spec {
             task_spec,
+            name: self.name,
             opts: self.opts,
+            restart_strategy: self.restart_strategy,
         };
+
         // Unfortunately, due to limitations of the mpsc API, we need to return
         // a general `node::TerminationError` from the task API. Because of
         // this, you'll see in the patterns bellow the usage of
@@ -435,15 +511,28 @@ impl RunningLeaf {
                 let termination_err = TerminationError::TerminationPanicked(termination_err);
                 (Err(termination_err), spec)
             }
+            // In the situation we get other kind of error, panic
+            Err(task::TerminationError::TaskFailureNotified) => {
+                // When a parent supervisor restarts a node, it invokes it's
+                // termination first. Because we already sent the error to the
+                // supervisor, it is valid to return an Ok result here.
+                //
+                // Also, we do not need to do a notification of failure, because that was
+                // already done when the error was sent.
+                (Ok(()), spec)
+            }
+            Err(task::TerminationError::TaskAborted) => {
+                unreachable!("validate this is being visited")
+            }
             // Happy path.
             Ok(_) => {
                 ev_notifier.worker_terminated(&runtime_name).await;
                 (Ok(()), spec)
             }
-            // In the situation we get other kind of error, panic
-            _ => {
-                panic!("implementation is not handling new leaf::TerminationError variants")
-            }
         }
+    }
+
+    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
+        &self.restart_strategy
     }
 }

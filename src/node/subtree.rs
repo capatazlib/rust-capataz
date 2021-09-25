@@ -143,20 +143,46 @@ impl TerminationError {
 }
 
 pub(crate) struct Spec {
-    spec: root::Spec,
+    root_spec: root::Spec,
     opts: Vec<leaf::Opt>,
+    restart_strategy: node::Restart,
 }
 
 /// A subtree that has a spawned task executing at runtime.
 pub(crate) struct RunningSubtree {
-    spec: root::Spec,
+    runtime_name: String,
+    root_spec: root::Spec,
     task: task::RunningTask<(), StartError, node::TerminationError>,
     opts: Vec<leaf::Opt>,
+    restart_strategy: node::Restart,
+}
+
+/// Internal value to allow RunningLeaf to implement the Debug trait
+#[derive(Debug)]
+struct RunningSubtreeDebug {
+    runtime_name: String,
+    root_spec: root::Spec,
+    restart_strategy: node::Restart,
+}
+
+impl std::fmt::Debug for RunningSubtree {
+    fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let data = RunningSubtreeDebug {
+            runtime_name: self.runtime_name.clone(),
+            root_spec: self.root_spec.clone(),
+            restart_strategy: self.restart_strategy.clone(),
+        };
+        data.fmt(format)
+    }
 }
 
 impl Spec {
     pub(crate) fn new(spec: root::Spec, opts: Vec<leaf::Opt>) -> Self {
-        Self { spec, opts }
+        Self {
+            root_spec: spec,
+            opts,
+            restart_strategy: node::Restart::OneForOne,
+        }
     }
 
     // Executes the `capataz::SupervisorSpec` run logic in a new spawned task.
@@ -166,26 +192,30 @@ impl Spec {
         mut ev_notifier: EventNotifier,
         parent_name: String,
         parent_chan: Option<TerminationNotifier>,
-    ) -> BoxFuture<'static, Result<RunningSubtree, StartError>> {
+    ) -> BoxFuture<'static, Result<RunningSubtree, (StartError, Self)>> {
         // The function must return a boxed future rather than using async fn
         // because this is a co-recursive function; `subtree::Spec::start`
         // relies on `Node::start` which relies on `subtree::Spec::start`.
         //
         // For more details see:
         // https://rust-lang.github.io/async-book/07_workarounds/04_recursion.html
-        let Self { spec, opts, .. } = self;
+        let Self {
+            root_spec,
+            opts,
+            restart_strategy,
+            ..
+        } = self;
 
         // Clone all the required metadata to spawn a new node without
         // invalidating variables.
+        let subtree_name = root_spec.get_name().to_owned();
         let subtree_parent_name = parent_name.clone();
-        let subtree_name = spec.get_name().to_owned();
         let subtree_ev_notifier = ev_notifier.clone();
-        let subtree_spec = spec.clone();
+        let subtree_spec = root_spec.clone();
 
         async move {
             // Build task that contains the supervision tree logic.
             let task_spec = task::TaskSpec::new_with_start(
-                subtree_name.clone(),
                 move |ctx: Context, start_notifier: StartNotifier| {
                     // Move ownership to the FnMut first, otherwise the compiler
                     // complains with E0507.
@@ -207,65 +237,96 @@ impl Spec {
             );
 
             // Start the supervision tree.
-            let runtime_name = task_spec.build_runtime_name(&parent_name);
-            let result = task_spec.start(&ctx, &parent_name, parent_chan).await;
+            let runtime_name = node::build_runtime_name(&parent_name, &subtree_name);
+            let result = task_spec.start(&ctx, parent_chan).await;
 
             match result {
                 // SAFETY: The only way this error occurs is if we implemented
                 // the supervision logic wrong.
-                Err(task::StartError::StartRecvError(_)) => {
+                Err((task::StartError::StartRecvError(_), _)) => {
                     unreachable!("invalid implementation; supervisors always listen to channel")
                 }
                 // SAFETY: The only way this error occurs is if we implemented
                 // the supervision logic wrong.
-                Err(task::StartError::StartTimeoutError(_)) => {
+                Err((task::StartError::StartTimeoutError(_), _)) => {
                     unreachable!("invalid implementation; supervisors don't have a start timeout")
                 }
                 // A start error notification was signalled via the provided
                 // `start_notifier`, return the error to our creator.
-                Err(task::StartError::BusinessLogicFailed(StartError::BuildFailed(build_err))) => {
+                Err((
+                    task::StartError::BusinessLogicFailed(StartError::BuildFailed(build_err)),
+                    _task_spec,
+                )) => {
                     ev_notifier
                         .supervisor_build_failed(&runtime_name, build_err.clone())
                         .await;
-                    Err(StartError::BuildFailed(build_err))
+                    let spec = Spec {
+                        root_spec,
+                        opts,
+                        restart_strategy,
+                    };
+                    Err((StartError::BuildFailed(build_err), spec))
                 }
                 // A start error notification was signalled via the provided
                 // `start_notifier`, return the error to our creator.
-                Err(task::StartError::BusinessLogicFailed(StartError::StartFailed(start_err))) => {
+                Err((
+                    task::StartError::BusinessLogicFailed(StartError::StartFailed(start_err)),
+                    _task_spec,
+                )) => {
                     ev_notifier
                         .supervisor_start_failed(&runtime_name, start_err.clone())
                         .await;
-                    Err(StartError::StartFailed(start_err))
+                    let spec = Spec {
+                        root_spec,
+                        opts,
+                        restart_strategy,
+                    };
+                    Err((StartError::StartFailed(start_err), spec))
                 }
                 // The supervisor (including it's child nodes) started without
                 // any errors
                 Ok(running_supervisor) => {
                     ev_notifier.supervisor_started(&runtime_name).await;
                     Ok(RunningSubtree {
-                        spec,
-                        opts,
+                        root_spec,
+                        runtime_name,
                         task: running_supervisor,
+                        opts,
+                        restart_strategy,
                     })
                 }
             }
         }
         .boxed()
     }
+
+    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
+        &self.restart_strategy
+    }
 }
 
 impl RunningSubtree {
+    pub(crate) fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+
+    pub(crate) fn get_name(&self) -> &str {
+        &self.root_spec.get_name()
+    }
+
     /// Executes the termination logic of a supervision tree.
     pub(crate) async fn terminate(
         self,
         mut ev_notifier: EventNotifier,
     ) -> (Result<(), TerminationError>, Spec) {
-        let runtime_name = self.task.get_runtime_name().to_owned();
+        let runtime_name = self.get_runtime_name().to_owned();
         // Discard the previous task_spec as the capataz recreates the
         // supervision tree node using the provided build nodes function.
         let (result, _task_spec) = self.task.terminate().await;
         let spec = Spec {
-            spec: self.spec,
+            root_spec: self.root_spec,
             opts: self.opts,
+            restart_strategy: self.restart_strategy,
         };
 
         // Unfortunately, due to limitations of the mpsc API, we need to return
@@ -305,8 +366,9 @@ impl RunningSubtree {
                         (Err(termination_err), spec)
                     }
                     other_err => {
-                        // SAFETY: The scenario bellow should never happen, as the task body never
-                        // returns values with a variant other than subtree::TerminationFailed.
+                        // SAFETY: The scenario bellow should never happen, as
+                        // the task body never returns values with a variant
+                        // other than subtree::TerminationFailed.
                         unreachable!(
                             "implementation error; subtree nodes should never return these errors from a task. error: {:?}",
                             other_err,
@@ -320,5 +382,9 @@ impl RunningSubtree {
                 (Ok(()), spec)
             }
         }
+    }
+
+    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
+        &self.restart_strategy
     }
 }

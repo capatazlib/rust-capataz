@@ -30,6 +30,7 @@ pub struct Context {
     // allow multiple worker routines to listen to the `Context` future, for
     // that we use the `Shared` wrapper.
     done: Shared<BoxFuture<'static, Result<(), Error>>>,
+    parent_name: String,
 }
 
 impl Context {
@@ -41,11 +42,25 @@ impl Context {
             // it on `Shared` value to allow mutliple reads and cheap
             // clones.
             done: pending().boxed().shared(),
+            parent_name: "".to_owned(),
         }
     }
 
-    /// Transforms a given `Context` into one that can be cancelled when calling
-    /// the returned `AbortHandle#abort` function.
+    /// Returns the parent_name stored in this `Context` record.
+    pub fn get_parent_name(&self) -> &str {
+        &self.parent_name
+    }
+
+    /// Clones a given `Context` and transforms it into one that contains the
+    /// specified parent name.
+    pub(crate) fn with_parent_name(&self, parent_name: &str) -> Self {
+        let mut ctx = self.clone();
+        ctx.parent_name = parent_name.to_owned();
+        ctx
+    }
+
+    /// Clones a given `Context` and transforms it into one that can be
+    /// cancelled when calling the returned `AbortHandle#abort` function.
     pub fn with_cancel(&self) -> (Self, AbortHandle) {
         let to_context_err = |r: Result<Result<(), Error>, Aborted>| match r {
             Ok(Ok(())) => Ok(()),
@@ -55,11 +70,12 @@ impl Context {
 
         let (done, aborter) = abortable(self.done.clone());
         let done = done.map(to_context_err).boxed().shared();
-        (Self { done }, aborter)
+        let parent_name = self.parent_name.clone();
+        (Self { done, parent_name }, aborter)
     }
 
-    /// Transforms a given `Context` into one that can time out once the given
-    /// time duration has been reached.
+    /// Clones a given `Context` and transforms it into one that can time out
+    /// once the given time duration has been reached.
     pub fn with_timeout(&self, d: Duration) -> Self {
         let err_d = d.clone();
         let to_context_err = move |r: Result<Result<(), Error>, Elapsed>| match r {
@@ -70,7 +86,8 @@ impl Context {
 
         let done = timeout(d, self.done.clone());
         let done = done.map(to_context_err).boxed().shared();
-        Self { done }
+        let parent_name = self.parent_name.clone();
+        Self { done, parent_name }
     }
 
     /// Returns a future that is used on `select!` statements to asses if we

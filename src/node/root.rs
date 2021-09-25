@@ -1,5 +1,7 @@
-use lazy_static::lazy_static;
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use lazy_static::lazy_static;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 
@@ -109,6 +111,74 @@ impl Nodes {
             cleanup: Some(CleanupFn::new(cleanup)),
         }
     }
+
+    pub(crate) async fn start(
+        self,
+        ctx: Context,
+        ev_notifier: EventNotifier,
+        runtime_name: &str,
+        start_order: &StartOrder,
+        parent_chan: TerminationNotifier,
+    ) -> Result<RunningNodes, subtree::StartError> {
+        let Self { mut nodes, cleanup } = self;
+        let cleanup = cleanup.unwrap_or(CleanupFn::empty());
+
+        // Create a runtime node per node spec
+        let mut running_nodes = Vec::new();
+
+        // Order child nodes in the desired start order
+        let nodes = match start_order {
+            StartOrder::LeftToRight => nodes,
+            StartOrder::RightToLeft => {
+                nodes.reverse();
+                nodes
+            }
+        };
+
+        for node in nodes {
+            // Execute the start logic for the given node
+            let result = node
+                .0
+                .start(
+                    ctx.clone(),
+                    ev_notifier.clone(),
+                    runtime_name,
+                    Some(parent_chan.clone()),
+                )
+                .await;
+
+            match result {
+                Ok(runtime_node) => {
+                    // When the node started without errors, add it to the vec of runtime_nodes
+                    running_nodes.push(runtime_node);
+                }
+                Err((start_err, _node_spec)) => {
+                    // A child node failed to start, we need to perform a cleanup operation and stop
+                    // all the previous children that got started in reversed order
+                    let start_err = anyhow::Error::new(start_err);
+                    let running_nodes = RunningNodes::new(running_nodes, cleanup);
+
+                    // When terminating children, some of them may have a
+                    // termination failure, register them and bubble them up.
+                    let result = running_nodes
+                        .terminate(ev_notifier.clone(), runtime_name)
+                        .await;
+
+                    let termination_err: Option<subtree::TerminationError> = result.err();
+
+                    let start_err =
+                        subtree::StartError::start_failed(runtime_name, start_err, termination_err);
+
+                    return Err(start_err);
+                }
+            }
+        }
+
+        let runtime_nodes = RunningNodes::new(running_nodes, cleanup);
+
+        // Happy path, all nodes were started without errors.
+        Ok(runtime_nodes)
+    }
 }
 
 /// Internal representation of the closure function used by the
@@ -133,13 +203,15 @@ impl BuildNodesFn {
     }
 }
 
-// Configuration value used to indicate in which order the child nodes of a
-// `capataz::SupervisorSpec` should start.
-//
-// Since: 0.0.0
-#[derive(Clone)]
+/// Configuration value used to indicate in which order the child nodes of a
+/// `capataz::SupervisorSpec` should start.
+///
+/// Since: 0.0.0
+#[derive(Clone, Debug)]
 pub enum StartOrder {
+    /// BLAH BLAH BLAH
     LeftToRight,
+    /// BLAH BLAH BLAH
     RightToLeft,
 }
 
@@ -148,6 +220,153 @@ pub enum StartOrder {
 ///
 /// Since: 0.0.0
 pub struct Opt(Box<dyn FnMut(&mut Spec) + Send + Sync + 'static>);
+
+pub struct RunningNodes {
+    // vector to keep track of the initial node order
+    nodes_ix: Vec<String>,
+    // hashmap with nodes mapped by names, used for easy lookup
+    // of nodes when dealing with errors
+    running_nodes: HashMap<String, RunningNode>,
+    // cleanup function for the existing running nodes
+    cleanup: CleanupFn,
+}
+
+impl RunningNodes {
+    pub(crate) fn new(input_nodes: Vec<RunningNode>, cleanup: CleanupFn) -> Self {
+        let mut nodes_ix = Vec::new();
+        let mut running_nodes = HashMap::new();
+
+        for node in input_nodes {
+            nodes_ix.push(node.get_name().to_owned());
+            running_nodes.insert(node.get_name().to_owned(), node);
+        }
+
+        Self {
+            nodes_ix,
+            running_nodes,
+            cleanup,
+        }
+    }
+
+    pub(crate) async fn restart_node(
+        &mut self,
+        ev_notifier: EventNotifier,
+        parent_name: &str,
+        parent_chan: TerminationNotifier,
+        node_name: &str,
+    ) -> Result<(), subtree::TerminationError> {
+        // Fetch the collection of running nodes and take ownership of the
+        // failed node to restart.
+        if let Some(running_node) = self.running_nodes.remove(node_name) {
+            // Execute the restart logic depending on the RestartStrategy of
+            // this node.
+            let restart_strategy = running_node.get_restart_strategy().clone();
+            match restart_strategy {
+                node::Restart::OneForOne => {
+                    // Terminate node to get back the original spec. This spec
+                    // allows us to create a new running node (effective
+                    // restart).
+                    let (_, mut node_spec) = running_node.terminate(ev_notifier.clone()).await;
+
+                    // Create a new context with the appropiate parent_name
+                    let ctx = Context::new();
+                    let ctx = ctx.with_parent_name(parent_name);
+
+                    // Loop on the worker creation until surpassing error
+                    // tolerance or the node starts without an error.
+                    loop {
+                        let result = node_spec
+                            .start(
+                                ctx.clone(),
+                                ev_notifier.clone(),
+                                parent_name,
+                                parent_chan.clone(),
+                            )
+                            .await;
+
+                        match result {
+                            Err((_start_err, failed_node_spec)) => {
+                                // Recover the node_spec to do another iteration
+                                // in the loop.
+                                node_spec = failed_node_spec;
+                                continue;
+                            }
+                            Ok(running_node) => {
+                                // Re-assign ownership of the running node back
+                                // to the RunningNodes record.
+                                let _ = self
+                                    .running_nodes
+                                    .insert(node_name.to_owned(), running_node);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                restart => todo!("pending restart strategy implementation: {:?}", restart),
+            }
+        }
+
+        // In the situation the node is not found in the running_nodes, ignore.
+        todo!("handle node is not present in running_nodes")
+    }
+
+    /// Iterates over all running nodes in reversed order (relative to the start
+    /// order). This function is used when terminating or restarting a
+    /// supervision tree.
+    ///
+    /// Note, a child node having a termination error won't abort the
+    /// termination procedure of the remaining running nodes.
+    pub(crate) async fn terminate(
+        self,
+        ev_notifier: EventNotifier,
+        parent_name: &str,
+    ) -> Result<(), subtree::TerminationError> {
+        let Self {
+            nodes_ix,
+            mut running_nodes,
+            cleanup,
+            ..
+        } = self;
+
+        // Accumulate all the termination errors from our child nodes.
+        let mut node_termination_errors = Vec::new();
+
+        // let mut w = std::fs::File::create("/tmp/test.txt").unwrap();
+
+        // Terminate workers in reverse order.
+        // TODO: take into account start order option.
+        for node_name in nodes_ix.into_iter().rev() {
+            if let Some(node) = running_nodes.remove(&node_name) {
+                let result = node.terminate(ev_notifier.clone()).await;
+                match result {
+                    // Note, we do not return the node_specs as we do not need them again to
+                    // restart.
+                    (Err(worker_err), _node_spec) => {
+                        // Append error if child node failed to terminate.
+                        node_termination_errors.push(worker_err);
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        // Next, cleanup resources allocated by the supervisor
+        let cleanup_err = cleanup.call().err();
+
+        // Report an error if the child nodes failed to terminate or there was a
+        // cleanup error
+        if node_termination_errors.len() > 0 || cleanup_err.is_some() {
+            let termination_err = subtree::TerminationError::termination_failed(
+                parent_name,
+                node_termination_errors,
+                cleanup_err,
+            );
+            Err(termination_err)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// Represents the root of a tree of tasks. A Supervisor may have leaf or
 /// sub-tree child nodes, where each of the nodes in the tree represent a task
@@ -198,109 +417,19 @@ pub struct Spec {
     start_order: StartOrder,
 }
 
-async fn start_child_nodes(
-    ctx: Context,
-    ev_notifier: EventNotifier,
-    runtime_name: &str,
-    start_order: &StartOrder,
-    parent_chan: TerminationNotifier,
-    cleanup: CleanupFn,
-    mut nodes: Vec<Node>,
-) -> Result<(Vec<RunningNode>, CleanupFn), subtree::StartError> {
-    // Create a runtime node per node spec
-    let mut runtime_nodes = Vec::new();
-    // Order child nodes in the desired start order
-    let nodes = match start_order {
-        StartOrder::LeftToRight => nodes,
-        StartOrder::RightToLeft => {
-            nodes.reverse();
-            nodes
-        }
-    };
-
-    for node in nodes {
-        // Execute the start logic for the given node
-        let result = node
-            .0
-            .start(
-                ctx.clone(),
-                ev_notifier.clone(),
-                runtime_name,
-                Some(parent_chan.clone()),
-            )
-            .await;
-
-        match result {
-            Ok(runtime_node) => {
-                // When the node started without errors, add it to the vec of runtime_nodes
-                runtime_nodes.push(runtime_node);
-            }
-            Err(start_err) => {
-                // A child node failed to start, we need to perform a cleanup operation and stop
-                // all the previous children that got started in reversed order
-                let start_err = anyhow::Error::new(start_err);
-
-                // When terminating children, some of them may have a
-                // termination failure, register them and bubble them up.
-                let result = terminate_child_nodes(
-                    ev_notifier.clone(),
-                    runtime_name,
-                    cleanup,
-                    runtime_nodes,
-                )
-                .await;
-
-                let termination_err: Option<subtree::TerminationError> = result.err();
-
-                let start_err =
-                    subtree::StartError::start_failed(runtime_name, start_err, termination_err);
-
-                return Err(start_err);
-            }
-        }
-    }
-    // Happy path, all nodes were started without errors.
-    Ok((runtime_nodes, cleanup))
+#[derive(Debug)]
+struct SpecDebug {
+    name: String,
+    start_order: StartOrder,
 }
 
-/// Iterates over all child nodes in reversed order (relative to the start
-/// order). This function is used when terminating or restarting a supervision
-/// tree. A child node having a termination error won't stop the termination of
-/// the remaining nodes.
-async fn terminate_child_nodes(
-    ev_notifier: EventNotifier,
-    parent_name: &str,
-    cleanup: CleanupFn,
-    nodes: Vec<RunningNode>,
-) -> Result<(), subtree::TerminationError> {
-    // Accumulate all the termination errors from our child nodes.
-    let mut node_termination_errors = Vec::new();
-
-    // Terminate workers in reverse order.
-    // TODO: take into account start order option.
-    for node in nodes.into_iter().rev() {
-        // Note, we do not return the node_specs as we do not need them again to
-        // restart.
-        if let (Err(worker_err), _node_spec) = node.terminate(ev_notifier.clone()).await {
-            // Append error if child node failed to terminate.
-            node_termination_errors.push(worker_err);
-        }
-    }
-
-    // Next, cleanup resources allocated by the supervisor
-    let cleanup_err = cleanup.call().err();
-
-    // Report an error if the child nodes failed to terminate or there was a
-    // cleanup error
-    if node_termination_errors.len() > 0 || cleanup_err.is_some() {
-        let termination_err = subtree::TerminationError::termination_failed(
-            parent_name,
-            node_termination_errors,
-            cleanup_err,
-        );
-        Err(termination_err)
-    } else {
-        Ok(())
+impl std::fmt::Debug for Spec {
+    fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let debug = SpecDebug {
+            name: self.name.clone(),
+            start_order: self.start_order.clone(),
+        };
+        debug.fmt(format)
     }
 }
 
@@ -327,9 +456,9 @@ impl Spec {
         let build_nodes_fn = Arc::new(Mutex::new(BuildNodesFn::new(build_nodes_fn)));
 
         let mut spec = Self {
-            start_order: StartOrder::LeftToRight,
             name,
             build_nodes_fn,
+            start_order: StartOrder::LeftToRight,
         };
 
         for opt_fn in &mut opts {
@@ -395,8 +524,9 @@ impl Spec {
 
         let mut spec = Self {
             name: name.into(),
-            start_order: StartOrder::LeftToRight,
             build_nodes_fn,
+
+            start_order: StartOrder::LeftToRight,
         };
 
         for opt_fn in &mut opts {
@@ -428,9 +558,9 @@ impl Spec {
         ctx: Context,
         ev_notifier: EventNotifier,
         mut sup_chan: TerminationListener,
+        parent_chan: TerminationNotifier,
         runtime_name: &str,
-        cleanup: CleanupFn,
-        children: Vec<RunningNode>,
+        mut running_nodes: RunningNodes,
     ) -> Result<(), subtree::TerminationError> {
         loop {
             tokio::select! {
@@ -441,32 +571,49 @@ impl Spec {
                     sup_chan.close();
 
                     // Terminate children of this supervisor and return.
-                    terminate_child_nodes(ev_notifier.clone(), &runtime_name, cleanup, children).await?;
+                    running_nodes.terminate(ev_notifier.clone(), &runtime_name).await?;
 
                     // Termination of all the child nodes did not fail. Break
                     // the loop and finish.
                     return Ok(());
                 },
                 // An error was reported by a child node
-                Some(node_err)  = sup_chan.recv() => {
-
+                node_err  = sup_chan.recv() => {
                     match node_err {
-                        task::TerminationError::TaskForcedKilled { .. } => {
-                            unreachable!("invalid implementation; forced kill should not be sent to parent_chan")
+                        None => {
+                            // The sup chan was closed, and there are no more
+                            // notifications sent. This scenario implies
+                            // termination is upon us.
+                            continue
                         }
-                        task::TerminationError::TaskAborted { .. } => {
-                            unreachable!("invalid implementation; abort task should not be sent to parent_chan")
+                        Some(task::TerminationError::TaskForcedKilled { .. }) => {
+                            unreachable!(
+                                "invalid implementation; forced kill should not be sent to parent_chan"
+                            )
                         }
-                        task::TerminationError::TaskFailureNotified { .. } => {
+                        Some(task::TerminationError::TaskAborted { .. }) => {
+                            unreachable!(
+                                "invalid implementation; abort task should not be sent to parent_chan"
+                            )
+                        }
+                        Some(task::TerminationError::TaskFailureNotified { .. }) => {
                             unreachable!("invalid implementation; failure notified should not be sent to parent_chan")
                         }
-                        task::TerminationError::TaskPanic { .. } => {
-                            todo!("panic handling")
+                        Some(task::TerminationError::TaskPanic { .. }) => {
+                            todo!("panic handling logic pending")
                         }
-                        task::TerminationError::TaskFailed { err, .. } => {
-                            let runtime_name = err.get_runtime_name().to_owned();
-                            let termination_err = err.get_cause_err();
-                            todo!("error handling for {}: {:?}", runtime_name, termination_err)
+                        Some(task::TerminationError::TaskFailed { err, .. }) => {
+                            err.notify_error(ev_notifier.clone()).await;
+                            let node_name = node::to_node_name(err.get_runtime_name());
+                            running_nodes
+                                .restart_node(
+                                    ev_notifier.clone(),
+                                    runtime_name,
+                                    parent_chan.clone(),
+                                    node_name,
+                                )
+                                .await?;
+                            continue;
                         }
                     }
                 }
@@ -484,7 +631,7 @@ impl Spec {
     ) -> Result<(), node::TerminationError> {
         // Build the name that is going to be used in all the supervision system
         // telemetry.
-        let runtime_name = task::build_runtime_name(parent_name, &self.name);
+        let runtime_name = node::build_runtime_name(parent_name, &self.name);
 
         // Build the channels that are going to be used by the supervised
         // workers to notify the supervisor that something went wrong, and allow
@@ -516,23 +663,21 @@ impl Spec {
             }
             // The node build (anonymous) function worked as expected.
             Ok(nodes) => {
-                // In the scenario cleanup is None, apply an empty cleanup.
-                let cleanup = nodes.cleanup.unwrap_or(CleanupFn::empty());
-
                 // Start child nodes in the specified order.
                 // TODO: add LeftToRight and RightToLeft support
-                let result = start_child_nodes(
-                    // It is imperative we use a new context here, otherwise the termination signal will start
-                    // in a indeterminate order, we want to ensure termination starts from the top-down
-                    Context::new(),
-                    ev_notifier.clone(),
-                    &runtime_name,
-                    &self.start_order,
-                    parent_chan,
-                    cleanup,
-                    nodes.nodes,
-                )
-                .await;
+                let node_ctx = Context::new().with_parent_name(&runtime_name);
+
+                let result = nodes
+                    .start(
+                        // It is imperative we use a new context here, otherwise the termination signal will start
+                        // in a indeterminate order, we want to ensure termination starts from the top-down
+                        node_ctx,
+                        ev_notifier.clone(),
+                        &runtime_name,
+                        &self.start_order,
+                        parent_chan.clone(),
+                    )
+                    .await;
 
                 match result {
                     // One of the child nodes failed to start
@@ -541,7 +686,7 @@ impl Spec {
                         Err(subtree::TerminationError::StartErrorAlreadyReported.into())
                     }
                     // All child nodes started without errors
-                    Ok((runtime_nodes, cleanup)) => {
+                    Ok(running_nodes) => {
                         // Notify our caller that we have started so that
                         // Supervisor record can be returned from a start call.
                         start_notifier.success();
@@ -551,11 +696,11 @@ impl Spec {
                         let result = self
                             .run_supervision_loop(
                                 ctx,
-                                ev_notifier.clone(),
+                                ev_notifier,
                                 sup_chan,
+                                parent_chan,
                                 &runtime_name,
-                                cleanup,
-                                runtime_nodes,
+                                running_nodes,
                             )
                             .await;
 
@@ -607,13 +752,13 @@ impl Spec {
             .await;
 
         match result {
-            Err(node::StartError::Leaf(_)) => {
+            Err((node::StartError::Leaf(_), _spec)) => {
                 unreachable!("invalid implementation; subtree code is returning a leaf error")
             }
             Ok(node::RunningNode::Leaf(_)) => {
                 unreachable!("invalid implementation; subtree code is returning a leaf value")
             }
-            Err(node::StartError::Subtree(start_err)) => Err(start_err),
+            Err((node::StartError::Subtree(start_err), _spec)) => Err(start_err),
             Ok(node::RunningNode::Subtree(running_subtree)) => Ok(Root {
                 spec: self,
                 running_subtree,
