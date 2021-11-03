@@ -35,30 +35,60 @@ impl<E> StartNotifier<E> {
 ////////////////////////////////////////////////////////////////////////////////
 
 /// Allows internal APIs running on a different thread to report a termination failure.
-pub(crate) struct TerminationNotifier<E>(mpsc::Sender<E>);
+pub(crate) struct TerminationNotifier<A, E> {
+    skip_notifications: bool,
+    notifier: mpsc::Sender<Result<A, E>>,
+}
 
-impl<E> Clone for TerminationNotifier<E> {
+impl<A, E> Clone for TerminationNotifier<A, E> {
     fn clone(&self) -> Self {
-        TerminationNotifier(self.0.clone())
+        TerminationNotifier {
+            skip_notifications: self.skip_notifications,
+            notifier: self.notifier.clone(),
+        }
     }
 }
 
-impl<E> TerminationNotifier<E>
+impl<A, E> TerminationNotifier<A, E>
 where
+    A: fmt::Debug,
     E: fmt::Display + fmt::Debug + Send + Sync + 'static,
 {
     /// Create a notifier from a oneshot channel
-    pub(crate) fn from_mpsc(sender: mpsc::Sender<E>) -> Self {
-        TerminationNotifier(sender)
+    pub(crate) fn from_mpsc(notifier: mpsc::Sender<Result<A, E>>) -> Self {
+        TerminationNotifier {
+            skip_notifications: false,
+            notifier,
+        }
     }
 
-    pub(crate) async fn report(&self, err: E) -> Result<(), E> {
-        if self.0.is_closed() {
+    pub(crate) async fn report_err(&self, err: E) -> Result<(), E> {
+        if self.notifier.is_closed() {
             Err(err)
         } else {
-            self.0.send(err).await.expect("implementation error");
+            self.notifier
+                .send(Err(err))
+                .await
+                .expect("implementation error");
             Ok(())
         }
+    }
+
+    pub(crate) async fn report_ok(&self, res: A) -> Result<(), A> {
+        if self.notifier.is_closed() || self.skip_notifications {
+            Err(res)
+        } else {
+            self.notifier
+                .send(Ok(res))
+                .await
+                .expect("implementation error");
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn skip_notifications(mut self) -> Self {
+        self.skip_notifications = true;
+        self
     }
 }
 

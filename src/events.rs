@@ -23,6 +23,8 @@ pub enum Event {
     SupervisorTerminated(NodeData),
     /// Signals a supervisor failed to terminate.
     SupervisorTerminationFailed(NodeData, Arc<subtree::TerminationFailed>),
+    /// Signals a supervisor failed with many restarts
+    SupervisorRestartedToManyTimes(NodeData, Arc<subtree::ToManyRestarts>),
     /// Signals a worker got started.
     WorkerStarted(NodeData),
     /// Signals a worker took too long to start and failed.
@@ -95,7 +97,6 @@ impl EventListener {
     }
 
     pub(crate) async fn call(&mut self, ev: Event) {
-        println!("{:?}", ev);
         if let Some(ref notify_fn) = self.0 {
             notify_fn(ev).await
         }
@@ -166,6 +167,20 @@ impl EventNotifier {
         err: Arc<subtree::TerminationFailed>,
     ) {
         let ev = Event::SupervisorTerminationFailed(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn supervisor_restarted_to_many_times(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<subtree::ToManyRestarts>,
+    ) {
+        let ev = Event::SupervisorRestartedToManyTimes(
             NodeData {
                 runtime_name: runtime_name.to_owned(),
             },
@@ -475,6 +490,30 @@ impl EventAssert {
         }))
     }
 
+    /// TODO
+    pub fn supervisor_restarted_to_many_times<S>(input_name0: S) -> EventAssert
+    where
+        S: Into<String> + Clone,
+    {
+        let input_name = input_name0.into();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::SupervisorRestartedToManyTimes(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting SupervisorRestartedToManyTimes with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!(
+                "Expecting SupervisorRestartedToManyTimes; got {:?} instead",
+                ev
+            )),
+        }))
+    }
+
     /// worker_started asserts an event that tells a worker with the given name
     /// started
     pub fn worker_started(input_name0: &str) -> EventAssert {
@@ -534,26 +573,6 @@ impl EventAssert {
             )),
         }))
     }
-
-    // pub fn worker_failed(input_name0: &str) -> EventAssert {
-    //     let input_name = input_name0.to_owned();
-    //     EventAssert(Box::new(move |ev| match &ev {
-    //         Event::WorkerTerminationFailed(NodeData { runtime_name }, _) => {
-    //             if runtime_name != &*input_name {
-    //                 Some(format!(
-    //                     "Expecting WorkerStartTimedOut with name {}; got {:?} instead",
-    //                     input_name, ev
-    //                 ))
-    //             } else {
-    //                 None
-    //             }
-    //         }
-    //         _ => Some(format!(
-    //             "Expecting WorkerStartTimedOut; got {:?} instead",
-    //             ev
-    //         )),
-    //     }))
-    // }
 
     /// Asserts that an `Event` is of value `WorkerTerminated` with the specified
     /// worker name.

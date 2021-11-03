@@ -76,7 +76,7 @@ pub struct TaskSpec<A, SE, TE> {
 
 /// Error that can be reported back when terminating a RunningTask
 #[derive(Debug, Error)]
-pub enum TerminationError<E>
+pub enum TerminationMessage<E>
 where
     E: fmt::Debug,
 {
@@ -96,6 +96,9 @@ where
     /// Returned when the failure has already been reported to error listener
     #[error("should never see this error message")]
     TaskFailureNotified,
+    // /// Indicates the task terminated without errors
+    // #[error("terminated without errors")]
+    // TaskDone,
 }
 
 /// Runtime representation of a TaskSpec.
@@ -103,7 +106,7 @@ pub struct RunningTask<A, SE, TE>
 where
     TE: fmt::Debug,
 {
-    join_handle: JoinHandle<Result<A, TerminationError<TE>>>,
+    join_handle: JoinHandle<Result<A, TerminationMessage<TE>>>,
     termination_handle: future::AbortHandle,
     kill_handle: future::AbortHandle,
 
@@ -118,8 +121,8 @@ where
     /// Internal implementation of the wait logic used in both the `wait` and
     /// `terminate` methods.
     async fn wait_handle(
-        join_handle: JoinHandle<Result<A, TerminationError<TE>>>,
-    ) -> Result<A, TerminationError<TE>> {
+        join_handle: JoinHandle<Result<A, TerminationMessage<TE>>>,
+    ) -> Result<A, TerminationMessage<TE>> {
         // await for the RunningTask routine result; the result is going to be
         // wrapped by a Result created from the JoinHandle API.
         let join_result = join_handle.await;
@@ -128,7 +131,7 @@ where
             Err(join_error) => {
                 if join_error.is_panic() {
                     // Caused when the task panicked.
-                    Err(TerminationError::TaskPanic {})
+                    Err(TerminationMessage::TaskPanic {})
                 } else {
                     // The `JoinHandle` was dropped or the `JoinHandle.abort`
                     // method was called explicitly. The current implementation
@@ -143,15 +146,11 @@ where
         }
     }
 
-    /// Waits for the task task to finish indefinitely.
-    pub(crate) async fn wait(self) -> (Result<A, TerminationError<TE>>, TaskSpec<A, SE, TE>) {
-        let result = Self::wait_handle(self.join_handle).await;
-        (result, self.spec)
-    }
-
     /// Executes the abort logic of the routine and then waits for a specified
     /// duration of time before it kills the task.
-    pub(crate) async fn terminate(self) -> (Result<A, TerminationError<TE>>, TaskSpec<A, SE, TE>) {
+    pub(crate) async fn terminate(
+        self,
+    ) -> (Result<A, TerminationMessage<TE>>, TaskSpec<A, SE, TE>) {
         let Self {
             kill_handle,
             join_handle,
@@ -179,7 +178,7 @@ where
                         // Timeout duration has been reached, force-kill the
                         // routine.
                         kill_handle.abort();
-                        Err(TerminationError::TaskForcedKilled)
+                        Err(TerminationMessage::TaskForcedKilled)
                     }
                     join_result = wait_result => {
                         // Task finished before the timeout, return result
@@ -193,20 +192,13 @@ where
 
         (task_result, spec)
     }
-
-    /// Executes the abort logic of the routine and then waits for a specified
-    /// duration of time before it kills the task. It does not return the
-    /// creating `TaskSpec`.
-    pub(crate) async fn terminate_(self) -> Result<A, TerminationError<TE>> {
-        self.terminate().await.0
-    }
 }
 
-type TerminationNotifier<TE> = notifier::TerminationNotifier<TerminationError<TE>>;
+type TerminationNotifier<A, TE> = notifier::TerminationNotifier<A, TerminationMessage<TE>>;
 
 impl<A, SE, TE> TaskSpec<A, SE, TE>
 where
-    A: Send + Sync + 'static,
+    A: fmt::Debug + Send + Sync + 'static,
     SE: fmt::Debug + fmt::Display + Send + Sync + 'static,
     TE: fmt::Debug + fmt::Display + Send + Sync + 'static,
 {
@@ -273,7 +265,7 @@ where
     pub(crate) async fn start(
         self,
         parent_ctx: &Context,
-        parent_chan: Option<TerminationNotifier<TE>>,
+        parent_chan: Option<TerminationNotifier<A, TE>>,
     ) -> Result<RunningTask<A, SE, TE>, (StartError<SE>, TaskSpec<A, SE, TE>)> {
         let Self {
             mut routine,
@@ -295,14 +287,14 @@ where
 
         // Create an intermediary future that flattens the result tree.
         let task_routine = async move {
-            use TerminationError::*;
+            use TerminationMessage::*;
             // start_notifier is invoked internally in the task_routine.
             let task_result = task_routine.await;
             match task_result {
                 Err(_) => {
                     let termination_err = TaskAborted;
                     if let Some(ref parent_chan) = &parent_chan {
-                        parent_chan.report(termination_err).await?;
+                        parent_chan.report_err(termination_err).await?;
                         Err(TaskFailureNotified)
                     } else {
                         Err(termination_err)
@@ -311,13 +303,23 @@ where
                 Ok(Err(err)) => {
                     let termination_err = TaskFailed { err };
                     if let Some(ref parent_chan) = &parent_chan {
-                        parent_chan.report(termination_err).await?;
+                        parent_chan.report_err(termination_err).await?;
                         Err(TaskFailureNotified)
                     } else {
                         Err(termination_err)
                     }
                 }
-                Ok(Ok(result)) => Ok(result),
+                Ok(Ok(result)) => {
+                    if let Some(ref parent_chan) = &parent_chan {
+                        let result = parent_chan.report_ok(result).await;
+                        match result {
+                            Ok(_) => Err(TaskFailureNotified),
+                            Err(result) => Ok(result),
+                        }
+                    } else {
+                        Ok(result)
+                    }
+                }
             }
         };
 
@@ -383,7 +385,7 @@ where
     pub(crate) async fn start_(
         self,
         parent_ctx: &Context,
-        parent_chan: Option<TerminationNotifier<TE>>,
+        parent_chan: Option<TerminationNotifier<A, TE>>,
     ) -> Result<RunningTask<A, SE, TE>, StartError<SE>> {
         self.start(parent_ctx, parent_chan)
             .await
@@ -400,7 +402,7 @@ mod tests {
 
     use crate::context::*;
     use crate::notifier::TerminationNotifier;
-    use crate::task::{self, StartError, TerminationError};
+    use crate::task::{self, StartError, TerminationMessage};
 
     type TaskSpec = task::TaskSpec<(), anyhow::Error, anyhow::Error>;
 
@@ -557,7 +559,7 @@ mod tests {
         let (result, _) = result.await;
 
         match result {
-            Err(TerminationError::TaskForcedKilled { .. }) => {
+            Err(TerminationMessage::TaskForcedKilled { .. }) => {
                 // Everything ok.
             }
             Err(err) => {
@@ -621,16 +623,22 @@ mod tests {
             .expect("task should start without errors");
 
         let (result, _) = task.terminate().await;
-        let err = receiver
+        let msg_result = receiver
             .recv()
             .await
             .expect("receiver should get the error");
         // Assert that the error received in the channel is the same error
         // returned in the result.
-        assert_eq!("task runtime failed: some failure", format!("{}", err));
+        assert_eq!(
+            "task runtime failed: some failure",
+            format!(
+                "{}",
+                msg_result.expect_err("expecting msg_result to be an error")
+            )
+        );
         match result {
-            Err(TerminationError::TaskFailureNotified { .. }) => (),
-            Err(TerminationError::TaskFailed { err, .. }) => {
+            Err(TerminationMessage::TaskFailureNotified { .. }) => (),
+            Err(TerminationMessage::TaskFailed { err, .. }) => {
                 assert!(false, "expected TaskFailureNotified, got: {}", err)
             }
             Err(err) => {

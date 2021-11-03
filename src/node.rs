@@ -17,7 +17,8 @@ pub(crate) mod subtree;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-type TerminationNotifier = notifier::TerminationNotifier<task::TerminationError<TerminationError>>;
+type TerminationNotifier =
+    notifier::TerminationNotifier<String, task::TerminationMessage<TerminationMessage>>;
 
 /// Represents an error reported on leaf or subtree when trying to spawn a
 /// task (green thread).
@@ -38,35 +39,37 @@ impl StartError {
 /// Represents an error reported on leaf or subtree when a spawned task (green
 /// thread) is terminated.
 #[derive(Debug, Error)]
-pub enum TerminationError {
+pub enum TerminationMessage {
     #[error("{0}")]
-    Leaf(#[from] leaf::TerminationError),
+    Leaf(#[from] leaf::TerminationMessage),
     #[error("{0}")]
-    Subtree(#[from] subtree::TerminationError),
+    Subtree(#[from] subtree::TerminationMessage),
     #[error("restart error: {0}")]
     RestartError(StartError),
 }
 
-impl TerminationError {
+impl TerminationMessage {
     pub fn get_cause_err(self) -> anyhow::Error {
         match self {
-            TerminationError::Leaf(termination_err) => termination_err.get_cause_err(),
-            TerminationError::Subtree(termination_err) => anyhow::Error::new(termination_err),
-            TerminationError::RestartError(start_err) => anyhow::Error::new(start_err),
+            TerminationMessage::Leaf(termination_err) => termination_err.get_cause_err(),
+            TerminationMessage::Subtree(termination_err) => anyhow::Error::new(termination_err),
+            TerminationMessage::RestartError(start_err) => anyhow::Error::new(start_err),
         }
     }
 
     pub fn get_runtime_name(&self) -> &str {
         match &self {
-            TerminationError::Leaf(termination_err) => termination_err.get_runtime_name(),
-            TerminationError::Subtree(termination_err) => termination_err.get_runtime_name(),
-            TerminationError::RestartError(start_err) => start_err.get_runtime_name(),
+            TerminationMessage::Leaf(termination_err) => termination_err.get_runtime_name(),
+            TerminationMessage::Subtree(termination_err) => termination_err.get_runtime_name(),
+            TerminationMessage::RestartError(start_err) => start_err.get_runtime_name(),
         }
     }
 
     pub(crate) async fn notify_error(&self, mut ev_notifier: EventNotifier) {
         match &self {
-            TerminationError::Leaf(leaf::TerminationError::TerminationFailed(termination_err)) => {
+            TerminationMessage::Leaf(leaf::TerminationMessage::TerminationFailed(
+                termination_err,
+            )) => {
                 ev_notifier
                     .worker_termination_failed(
                         termination_err.get_runtime_name(),
@@ -74,7 +77,17 @@ impl TerminationError {
                     )
                     .await
             }
-            _ => todo!("pending implementation"),
+            TerminationMessage::Subtree(subtree::TerminationMessage::ToManyRestarts(
+                to_many_restarts_err,
+            )) => {
+                ev_notifier
+                    .supervisor_restarted_to_many_times(
+                        to_many_restarts_err.get_runtime_name(),
+                        to_many_restarts_err.clone(),
+                    )
+                    .await
+            }
+            _ => todo!("pending implementation: {:?}", self),
         }
     }
 }
@@ -206,17 +219,17 @@ impl RunningNode {
     pub(crate) async fn terminate(
         self,
         ev_notifier: EventNotifier,
-    ) -> (Result<(), TerminationError>, Node) {
+    ) -> (Result<(), TerminationMessage>, Node) {
         // Delegate the termination logic to leaf and subtree types.
         match self {
             RunningNode::Leaf(leaf) => {
                 let (result, leaf_spec) = leaf.terminate(ev_notifier).await;
-                let result = result.map_err(TerminationError::Leaf);
+                let result = result.map_err(TerminationMessage::Leaf);
                 (result, Node(NodeSpec::Leaf(leaf_spec)))
             }
             RunningNode::Subtree(subtree) => {
                 let (result, subtree_spec) = subtree.terminate(ev_notifier).await;
-                let result = result.map_err(TerminationError::Subtree);
+                let result = result.map_err(TerminationMessage::Subtree);
                 (result, Node(NodeSpec::Subtree(subtree_spec)))
             }
         }
@@ -230,9 +243,9 @@ impl RunningNode {
     }
 }
 
-pub(crate) fn to_node_name(runtime_name: &str) -> &str {
+pub(crate) fn to_node_name(runtime_name: &str) -> String {
     match runtime_name.split("/").last() {
-        Some(item) => item,
+        Some(item) => item.to_owned(),
         None => panic!("invalid runtime_name given: {}", runtime_name),
     }
 }
