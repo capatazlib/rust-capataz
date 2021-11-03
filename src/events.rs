@@ -35,10 +35,14 @@ pub enum Event {
     WorkerTerminated(NodeData),
     /// Signals a worker took too long to terminate and failed.
     WorkerTerminationTimedOut(NodeData, Arc<leaf::TerminationTimedOut>),
-    /// Signals a worker failed.
+    /// Signals a worker failed at termination.
     WorkerTerminationFailed(NodeData, Arc<leaf::TerminationFailed>),
-    /// Signals a worker panicked.
+    /// Signals a worker panicked at termination.
     WorkerTerminationPanicked(NodeData, Arc<leaf::TerminationPanicked>),
+    /// Signals a worker failed at runtime.
+    WorkerRuntimeFailed(NodeData, Arc<leaf::RuntimeFailed>),
+    /// Signals a worker panicked at runtime.
+    WorkerRuntimePanicked(NodeData, Arc<leaf::RuntimePanicked>),
 }
 
 /// Struct that holds details about the producer of the event (supervisor or
@@ -228,6 +232,34 @@ impl EventNotifier {
         let ev = Event::WorkerTerminated(NodeData {
             runtime_name: runtime_name.to_owned(),
         });
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn worker_runtime_failed(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<leaf::RuntimeFailed>,
+    ) {
+        let ev = Event::WorkerRuntimeFailed(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
+        self.0.call(ev).await;
+    }
+
+    pub(crate) async fn worker_runtime_panicked(
+        &mut self,
+        runtime_name: &str,
+        err: Arc<leaf::RuntimePanicked>,
+    ) {
+        let ev = Event::WorkerRuntimePanicked(
+            NodeData {
+                runtime_name: runtime_name.to_owned(),
+            },
+            err,
+        );
         self.0.call(ev).await;
     }
 
@@ -590,6 +622,28 @@ impl EventAssert {
                 }
             }
             _ => Some(format!("Expecting WorkerTerminated; got {:?} instead", ev)),
+        }))
+    }
+
+    /// Asserts that an `Event` is of value `WorkerRuntimeFailed` with the
+    /// specified worker name.
+    pub fn worker_runtime_failed(input_name0: &str) -> EventAssert {
+        let input_name = input_name0.to_owned();
+        EventAssert(Box::new(move |ev| match &ev {
+            Event::WorkerRuntimeFailed(NodeData { runtime_name }, _) => {
+                if runtime_name != &*input_name {
+                    Some(format!(
+                        "Expecting WorkerRuntimeFailed with name {}; got {:?} instead",
+                        input_name, ev
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => Some(format!(
+                "Expecting WorkerTerminationFailed; got {:?} instead",
+                ev
+            )),
         }))
     }
 

@@ -95,7 +95,7 @@ impl Spec {
                             // Transform a general business logic error into a
                             // TerminationMessage that later can be handled by a
                             // subtree node (Supervisor).
-                            node::TerminationMessage::Leaf(TerminationMessage::from_task_error(
+                            node::TerminationMessage::Leaf(TerminationMessage::from_runtime_error(
                                 &runtime_name,
                                 err,
                             ))
@@ -156,7 +156,7 @@ impl Spec {
                             // Transform a general business logic error into a
                             // TerminationMessage that later can be handled by a
                             // subtree node (Supervisor).
-                            node::TerminationMessage::Leaf(TerminationMessage::from_task_error(
+                            node::TerminationMessage::Leaf(TerminationMessage::from_runtime_error(
                                 &runtime_name,
                                 err,
                             ))

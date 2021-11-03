@@ -267,7 +267,7 @@ impl Spec {
                             // Send notification of termination error; this call
                             // will dynamically dispatch to either leaf or
                             // subtree implementations.
-                            err.notify_error(ev_notifier.clone()).await;
+                            err.notify_runtime_error(ev_notifier.clone()).await;
                             let node_name = node::to_node_name(err.get_runtime_name());
                             match restart_manager.register_error(anyhow::Error::new(err)) {
                                 Ok(new_restart_manager) => {

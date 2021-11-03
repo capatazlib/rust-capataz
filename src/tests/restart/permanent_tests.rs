@@ -65,7 +65,7 @@ async fn test_single_level_worker_restart_with_failure() {
         .assert_exact(vec![
             EventAssert::worker_started("/root/worker"),
             EventAssert::supervisor_started("/root"),
-            EventAssert::worker_termination_failed("/root/worker"),
+            EventAssert::worker_runtime_failed("/root/worker"),
             EventAssert::worker_started("/root/worker"),
             EventAssert::worker_terminated("/root/worker"),
             EventAssert::supervisor_terminated("/root"),
@@ -211,7 +211,7 @@ async fn test_single_level_worker_to_many_restart() {
         .assert_exact(vec![
             EventAssert::worker_started("/root/worker"),
             EventAssert::supervisor_started("/root"),
-            EventAssert::worker_termination_failed("/root/worker"),
+            EventAssert::worker_runtime_failed("/root/worker"),
             EventAssert::supervisor_restarted_to_many_times("/root"),
         ])
         .await;
@@ -308,7 +308,7 @@ async fn test_multi_level_worker_to_many_restart_recovery() {
             EventAssert::worker_started("/root/subtree/worker-3"),
             EventAssert::supervisor_started("/root/subtree"),
             EventAssert::supervisor_started("/root"),
-            EventAssert::worker_termination_failed("/root/subtree/worker-2"),
+            EventAssert::worker_runtime_failed("/root/subtree/worker-2"),
             EventAssert::worker_terminated("/root/subtree/worker-3"),
             EventAssert::worker_terminated("/root/subtree/worker-1"),
             EventAssert::supervisor_restarted_to_many_times("/root/subtree"),

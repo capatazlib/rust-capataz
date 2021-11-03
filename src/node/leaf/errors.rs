@@ -57,9 +57,35 @@ pub enum StartError {
     StartFailed(Arc<StartFailed>),
 }
 
-/// Represents an error returned by a `capataz::Node` business logic, it usually
-/// indicates an expected error scenario. This error the is propagated to
-/// supervisors which then would trigger a restart procedure.
+/// Represents an error returned by a `capataz::Node` business logic. This error
+/// the is propagated to supervisors which then would trigger a restart
+/// procedure.
+///
+/// Since: 0.0.0
+#[derive(Debug, Error)]
+#[error("worker runtime failed: {err}")]
+pub struct RuntimeFailed {
+    runtime_name: String,
+    err: anyhow::Error,
+}
+
+impl RuntimeFailed {
+    pub(crate) fn new<S>(runtime_name: S, err: anyhow::Error) -> Self
+    where
+        S: Into<String>,
+    {
+        Self {
+            runtime_name: runtime_name.into(),
+            err,
+        }
+    }
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+}
+
+/// Represents an error returned by a `capataz::Node` business logic at
+/// termination time.
 ///
 /// Since: 0.0.0
 #[derive(Debug, Error)]
@@ -109,13 +135,11 @@ impl TerminationTimedOut {
     }
 }
 
-/// Represents an unexpected error in a `capataz::Node` business logic. This
-/// error is propagated to supervisors which then would trigger a restart
-/// procedure.
+/// Represents an unexpected error in a worker termination logic.
 ///
 /// Since: 0.0.0
 #[derive(Debug, Error)]
-#[error("worker panicked at runtime")]
+#[error("worker panicked at termination")]
 // TODO: add panic metadata
 pub struct TerminationPanicked {
     runtime_name: String,
@@ -136,8 +160,34 @@ impl TerminationPanicked {
     }
 }
 
-/// Unifies all possible errors that are reported when terminating a
-/// `capataz::Node`.
+/// Represents an unexpected panic in a worker business logic. This error is
+/// propagated to supervisors which then would trigger a restart procedure.
+///
+/// Since: 0.0.0
+#[derive(Debug, Error)]
+#[error("worker panicked at runtime")]
+// TODO: add panic metadata
+pub struct RuntimePanicked {
+    runtime_name: String,
+}
+
+impl RuntimePanicked {
+    pub(crate) fn new<S>(runtime_name: S) -> Self
+    where
+        S: Into<String>,
+    {
+        Self {
+            runtime_name: runtime_name.into(),
+        }
+    }
+
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+}
+
+/// Unifies all possible outcomes that are reported when a worker terminates
+/// it's runtime.
 ///
 /// Since: 0.0.0
 #[derive(Debug, Error)]
@@ -148,6 +198,10 @@ pub enum TerminationMessage {
     TerminationTimedOut(Arc<TerminationTimedOut>),
     #[error("{0}")]
     TerminationPanicked(Arc<TerminationPanicked>),
+    #[error("{0}")]
+    RuntimePanicked(Arc<RuntimePanicked>),
+    #[error("{0}")]
+    RuntimeFailed(Arc<RuntimeFailed>),
 }
 
 impl TerminationMessage {
@@ -162,6 +216,8 @@ impl TerminationMessage {
             TerminationMessage::TerminationTimedOut(termination_err) => {
                 termination_err.get_runtime_name()
             }
+            TerminationMessage::RuntimeFailed(err) => err.get_runtime_name(),
+            TerminationMessage::RuntimePanicked(err) => err.get_runtime_name(),
         }
     }
 
@@ -176,14 +232,16 @@ impl TerminationMessage {
             TerminationMessage::TerminationTimedOut(termination_err) => {
                 anyhow::Error::new(termination_err.clone())
             }
+            TerminationMessage::RuntimeFailed(err) => anyhow::Error::new(err.clone()),
+            TerminationMessage::RuntimePanicked(err) => anyhow::Error::new(err.clone()),
         }
     }
 
-    pub(crate) fn from_task_error<S>(runtime_name: S, task_err: anyhow::Error) -> Self
+    pub(crate) fn from_runtime_error<S>(runtime_name: S, task_err: anyhow::Error) -> Self
     where
         S: Into<String>,
     {
-        TerminationMessage::TerminationFailed(Arc::new(TerminationFailed::new(
+        TerminationMessage::RuntimeFailed(Arc::new(RuntimeFailed::new(
             runtime_name.into(),
             task_err,
         )))

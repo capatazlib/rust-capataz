@@ -65,16 +65,11 @@ impl TerminationMessage {
         }
     }
 
-    pub(crate) async fn notify_error(&self, mut ev_notifier: EventNotifier) {
+    pub(crate) async fn notify_runtime_error(&self, mut ev_notifier: EventNotifier) {
         match &self {
-            TerminationMessage::Leaf(leaf::TerminationMessage::TerminationFailed(
-                termination_err,
-            )) => {
+            TerminationMessage::Leaf(leaf::TerminationMessage::RuntimeFailed(err)) => {
                 ev_notifier
-                    .worker_termination_failed(
-                        termination_err.get_runtime_name(),
-                        termination_err.clone(),
-                    )
+                    .worker_runtime_failed(err.get_runtime_name(), err.clone())
                     .await
             }
             TerminationMessage::Subtree(subtree::TerminationMessage::ToManyRestarts(
