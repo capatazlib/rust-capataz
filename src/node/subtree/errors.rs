@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::node::{self, root};
+use crate::node;
+use crate::supervisor;
 
 /// Represents an error reported by one of the child nodes at start time, it may
 /// also include some termination error if the previously started nodes fail to
@@ -95,7 +96,7 @@ pub enum TerminationMessage {
     #[error("{0}")]
     TerminationFailed(Arc<TerminationFailed>),
     #[error("{0}")]
-    TooManyRestarts(Arc<root::TooManyRestarts>),
+    TooManyRestarts(Arc<supervisor::TooManyRestarts>),
     #[error("{0}")]
     StartErrorOnRestart(Arc<node::StartError>),
     #[error("start error already reported")]

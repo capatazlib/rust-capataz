@@ -6,15 +6,15 @@ use tokio::time;
 
 use crate::context::Context;
 use crate::events::{EventListener, EventNotifier};
-use crate::node::root::RestartManager;
-use crate::node::{self, leaf, root, subtree, Node, Strategy};
+use crate::node::{self, leaf, subtree, Node, Strategy};
 use crate::notifier;
+use crate::supervisor::RestartManager;
 use crate::task;
 
 use super::cleanup::*;
 use super::node_builder::*;
 use super::opts::*;
-use super::running_root::*;
+use super::running_supervisor::*;
 
 lazy_static! {
     /// Default buffer size for a supervisor error channel.
@@ -193,9 +193,8 @@ impl Spec {
     /// with some node configuration.
     ///
     /// Since: 0.0.0
-    pub fn subtree(self, opts: Vec<leaf::Opt>) -> Node {
-        let subtree_spec = subtree::Spec::new(self, opts);
-        node::Node(node::NodeSpec::Subtree(subtree_spec))
+    pub fn subtree(self, opts: Vec<leaf::Opt>) -> node::Node {
+        subtree::Spec::new(self, opts).to_node()
     }
 
     /// Returns the name associated to this `capataz::SupervisorSpec`.
@@ -210,7 +209,7 @@ impl Spec {
         &mut self,
         ctx: Context,
         mut ev_notifier: EventNotifier,
-        mut restart_manager: root::RestartManager,
+        mut restart_manager: RestartManager,
         // sup_chan is the channel used by *this* supervision tree
         // to listen to it's child nodes
         mut sup_chan: TerminationListener,
@@ -445,15 +444,14 @@ impl Spec {
         self,
         ctx: Context,
         ev_listener: EventListener,
-    ) -> Result<Root, subtree::StartError> {
+    ) -> Result<Supervisor, subtree::StartError> {
         // Create a copy of this supervisor and automatically transform into a
         // subtree to re-utilize the start subtree logic.
         let root_spec = self.clone().subtree(Vec::new());
         let ev_notifier = EventNotifier::new(ev_listener);
 
         let result = root_spec
-            .0
-            .start(ctx, ev_notifier.clone(), *SUPERVISOR_ROOT_NAME, None)
+            .start_root(ctx, ev_notifier.clone(), *SUPERVISOR_ROOT_NAME)
             .await;
 
         match result {
@@ -465,7 +463,7 @@ impl Spec {
             }
             Err((node::StartError::Subtree(start_err), _spec)) => Err(start_err),
             Ok(node::RunningNode::Subtree(running_subtree)) => {
-                Ok(Root::new(self, running_subtree, ev_notifier))
+                Ok(Supervisor::new(self, running_subtree, ev_notifier))
             }
         }
     }
@@ -586,12 +584,11 @@ impl Nodes {
         for node in nodes_it {
             // Execute the start logic for the given node
             let result = node
-                .0
                 .start(
                     ctx.clone(),
                     ev_notifier.clone(),
                     runtime_name,
-                    Some(parent_chan.clone()),
+                    parent_chan.clone(),
                 )
                 .await;
 

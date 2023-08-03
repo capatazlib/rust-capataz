@@ -1,5 +1,6 @@
 use crate::events::EventNotifier;
-use crate::node::{self, leaf, root};
+use crate::node::{self, leaf};
+use crate::supervisor;
 use crate::task;
 
 use super::errors::*;
@@ -8,7 +9,7 @@ use super::spec::*;
 /// A subtree that has a spawned task executing at runtime.
 pub(crate) struct RunningSubtree {
     runtime_name: String,
-    root_spec: root::Spec,
+    spec: supervisor::Spec,
     task: task::RunningTask<node::RuntimeName, StartError, node::TerminationMessage>,
     opts: Vec<leaf::Opt>,
     strategy: node::Strategy,
@@ -18,7 +19,7 @@ pub(crate) struct RunningSubtree {
 #[derive(Debug)]
 struct RunningSubtreeDebug {
     runtime_name: String,
-    root_spec: root::Spec,
+    spec: supervisor::Spec,
     strategy: node::Strategy,
 }
 
@@ -26,7 +27,7 @@ impl std::fmt::Debug for RunningSubtree {
     fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         let data = RunningSubtreeDebug {
             runtime_name: self.runtime_name.clone(),
-            root_spec: self.root_spec.clone(),
+            spec: self.spec.clone(),
             strategy: self.strategy.clone(),
         };
         data.fmt(format)
@@ -36,14 +37,14 @@ impl std::fmt::Debug for RunningSubtree {
 impl RunningSubtree {
     pub(crate) fn new(
         runtime_name: String,
-        root_spec: root::Spec,
+        spec: supervisor::Spec,
         task: task::RunningTask<node::RuntimeName, StartError, node::TerminationMessage>,
         opts: Vec<leaf::Opt>,
         strategy: node::Strategy,
     ) -> Self {
         Self {
             runtime_name,
-            root_spec,
+            spec,
             task,
             opts,
             strategy,
@@ -55,7 +56,7 @@ impl RunningSubtree {
     }
 
     pub(crate) fn get_name(&self) -> &str {
-        &self.root_spec.get_name()
+        &self.spec.get_name()
     }
 
     pub(crate) fn get_restart(&self) -> task::Restart {
@@ -71,7 +72,7 @@ impl RunningSubtree {
         // Discard the previous task_spec as the capataz library recreates the
         // supervision tree node using the provided build nodes function.
         let (result, _task_spec) = self.task.terminate().await;
-        let spec = Spec::from_running_subtree(self.root_spec, self.opts, self.strategy);
+        let spec = Spec::from_running_subtree(self.spec, self.opts, self.strategy);
 
         // Unfortunately, due to limitations of the mpsc API, we need to return
         // a general `node::TerminationMessage` from the task API. Because of

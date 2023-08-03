@@ -1,5 +1,3 @@
-use crate::context::Context;
-
 use super::spec::*;
 
 /// Internal representation of the closure function used by the

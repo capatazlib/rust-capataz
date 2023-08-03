@@ -8,11 +8,7 @@ use crate::task;
 /// Contains the types and logic to create, start and terminate leaf nodes
 /// (workers) in the supervision tree.
 pub(crate) mod leaf;
-/// Contains the types and logic to create, start and terminate subtree nodes
-/// (sub-supervisor) in the supervision tree.
-pub(crate) mod root;
-/// Contains the types and logic to create, start and terminate the root node of
-/// the supervision tree.
+/// Wraps the supervisor package into an interface that is used for subtrees.
 pub(crate) mod subtree;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -109,6 +105,18 @@ pub enum Strategy {
 pub struct Node(NodeSpec);
 
 impl Node {
+    pub(crate) async fn start_root(
+        self,
+        ctx: Context,
+        ev_notifier: EventNotifier,
+        parent_name: &str,
+    ) -> Result<RunningNode, (StartError, Node)> {
+        self.0
+            .start(ctx, ev_notifier, parent_name, None)
+            .await
+            .map_err(|(start_err, spec_node)| (start_err, Node(spec_node)))
+    }
+
     pub(crate) async fn start(
         self,
         ctx: Context,

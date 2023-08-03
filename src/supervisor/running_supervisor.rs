@@ -2,8 +2,8 @@ use either::Either;
 use std::collections::HashMap;
 
 use crate::events::EventNotifier;
-use crate::node::root::StartOrder;
 use crate::node::{self, subtree, RunningNode, Strategy};
+use crate::supervisor::opts::StartOrder;
 use crate::task::Restart;
 use crate::Context;
 
@@ -334,13 +334,13 @@ impl RunningNodes {
 /// `capataz::Spec`
 ///
 /// Since: 0.0.0
-pub struct Root {
+pub struct Supervisor {
     spec: Spec,
     running_subtree: subtree::RunningSubtree,
     ev_notifier: EventNotifier,
 }
 
-impl Root {
+impl Supervisor {
     pub(crate) fn new(
         spec: Spec,
         running_subtree: subtree::RunningSubtree,

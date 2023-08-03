@@ -27,16 +27,19 @@ pub use events::EventListener;
 /// Contains the types and logic to create, start and terminate nodes in the
 /// supervision tree.
 mod node;
+/// Contains the types and logic to manage a supervisor.
+mod supervisor;
+
 pub use node::leaf::Opt as WorkerOpt;
 pub use node::leaf::Spec as Worker;
 pub use node::leaf::StartNotifier;
-pub use node::root::opts::StartOrder;
-pub use node::root::Opt as SupervisorOpt;
-pub use node::root::Root as Supervisor;
-pub use node::root::Spec as SupervisorSpec;
 pub use node::Node;
 pub use node::Strategy;
 pub use std::time::Duration;
+pub use supervisor::opts::StartOrder;
+pub use supervisor::Opt as SupervisorOpt;
+pub use supervisor::Spec as SupervisorSpec;
+pub use supervisor::Supervisor;
 
 #[cfg(test)]
 pub use events::{EventAssert, EventBufferCollector};

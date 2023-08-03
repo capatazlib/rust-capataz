@@ -1,5 +1,4 @@
 use super::spec::*;
-use crate::node::Strategy;
 
 /// Configuration value used to indicate in which order the child nodes of a
 /// `capataz::SupervisorSpec` should start.

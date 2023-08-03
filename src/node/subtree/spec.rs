@@ -2,8 +2,9 @@ use futures::future::{BoxFuture, FutureExt};
 
 use crate::context::Context;
 use crate::events::EventNotifier;
-use crate::node::{self, leaf, root};
+use crate::node::{self, leaf};
 use crate::notifier;
+use crate::supervisor;
 use crate::task;
 
 use super::errors::*;
@@ -17,30 +18,34 @@ type TerminationNotifier =
     notifier::TerminationNotifier<String, task::TerminationMessage<node::TerminationMessage>>;
 
 pub(crate) struct Spec {
-    root_spec: root::Spec,
+    spec: supervisor::Spec,
     opts: Vec<leaf::Opt>,
     strategy: node::Strategy,
 }
 
 impl Spec {
     pub(crate) fn from_running_subtree(
-        root_spec: root::Spec,
+        spec: supervisor::Spec,
         opts: Vec<leaf::Opt>,
         strategy: node::Strategy,
     ) -> Self {
         Self {
-            root_spec,
+            spec,
             opts,
             strategy,
         }
     }
 
-    pub(crate) fn new(spec: root::Spec, opts: Vec<leaf::Opt>) -> Self {
+    pub(crate) fn new(spec: supervisor::Spec, opts: Vec<leaf::Opt>) -> Self {
         Self {
-            root_spec: spec,
+            spec,
             opts,
             strategy: node::Strategy::OneForOne,
         }
+    }
+
+    pub(crate) fn to_node(self) -> node::Node {
+        node::Node(node::NodeSpec::Subtree(self))
     }
 
     // Executes the `capataz::SupervisorSpec` run logic in a new spawned task.
@@ -58,7 +63,7 @@ impl Spec {
         // For more details see:
         // https://rust-lang.github.io/async-book/07_workarounds/04_recursion.html
         let Self {
-            root_spec,
+            spec,
             opts,
             strategy,
             ..
@@ -66,10 +71,10 @@ impl Spec {
 
         // Clone all the required metadata to spawn a new node without
         // invalidating variables.
-        let subtree_name = root_spec.get_name().to_owned();
+        let subtree_name = spec.get_name().to_owned();
         let subtree_parent_name = parent_name.clone();
         let subtree_ev_notifier = ev_notifier.clone();
-        let subtree_spec = root_spec.clone();
+        let subtree_spec = spec.clone();
 
         async move {
             // Build task that contains the supervision tree logic.
@@ -119,7 +124,7 @@ impl Spec {
                         .supervisor_build_failed(&runtime_name, build_err.clone())
                         .await;
                     let spec = Spec {
-                        root_spec,
+                        spec,
                         opts,
                         strategy,
                     };
@@ -135,7 +140,7 @@ impl Spec {
                         .supervisor_start_failed(&runtime_name, start_err.clone())
                         .await;
                     let spec = Spec {
-                        root_spec,
+                        spec,
                         opts,
                         strategy,
                     };
@@ -147,7 +152,7 @@ impl Spec {
                     ev_notifier.supervisor_started(&runtime_name).await;
                     Ok(RunningSubtree::new(
                         runtime_name,
-                        root_spec,
+                        spec,
                         running_supervisor,
                         opts,
                         strategy,
@@ -159,6 +164,6 @@ impl Spec {
     }
 
     pub(crate) fn get_name(&self) -> &str {
-        self.root_spec.get_name()
+        self.spec.get_name()
     }
 }

@@ -7,7 +7,8 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::{self, JoinHandle};
 use tokio::time::{timeout_at, Instant};
 
-use crate::node::{leaf, root, subtree};
+use crate::node::{leaf, subtree};
+use crate::supervisor;
 
 /// A value that represents all the different events that may happen on a
 /// running supervision tree.
@@ -24,7 +25,7 @@ pub enum Event {
     /// Signals a supervisor failed to terminate.
     SupervisorTerminationFailed(NodeData, Arc<subtree::TerminationFailed>),
     /// Signals a supervisor failed with many restarts
-    SupervisorRestartedToManyTimes(NodeData, Arc<root::TooManyRestarts>),
+    SupervisorRestartedToManyTimes(NodeData, Arc<supervisor::TooManyRestarts>),
     /// Signals a worker got started.
     WorkerStarted(NodeData),
     /// Signals a worker took too long to start and failed.
@@ -182,7 +183,7 @@ impl EventNotifier {
     pub(crate) async fn supervisor_restarted_too_many_times(
         &mut self,
         runtime_name: &str,
-        err: Arc<root::TooManyRestarts>,
+        err: Arc<supervisor::TooManyRestarts>,
     ) {
         let ev = Event::SupervisorRestartedToManyTimes(
             NodeData {
