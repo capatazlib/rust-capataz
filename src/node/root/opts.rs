@@ -1,4 +1,5 @@
 use super::spec::*;
+use crate::node::Strategy;
 
 /// Configuration value used to indicate in which order the child nodes of a
 /// `capataz::SupervisorSpec` should start.
@@ -6,9 +7,9 @@ use super::spec::*;
 /// Since: 0.0.0
 #[derive(Clone, Debug)]
 pub enum StartOrder {
-    /// BLAH BLAH BLAH
+    /// Indicates that children nodes should be started from left to right
     LeftToRight,
-    /// BLAH BLAH BLAH
+    /// Indicates that children nodes should be started from right to left
     RightToLeft,
 }
 

@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::{self, JoinHandle};
 use tokio::time::{timeout_at, Instant};
 
-use crate::node::{leaf, subtree};
+use crate::node::{leaf, root, subtree};
 
 /// A value that represents all the different events that may happen on a
 /// running supervision tree.
@@ -24,7 +24,7 @@ pub enum Event {
     /// Signals a supervisor failed to terminate.
     SupervisorTerminationFailed(NodeData, Arc<subtree::TerminationFailed>),
     /// Signals a supervisor failed with many restarts
-    SupervisorRestartedToManyTimes(NodeData, Arc<subtree::ToManyRestarts>),
+    SupervisorRestartedToManyTimes(NodeData, Arc<root::TooManyRestarts>),
     /// Signals a worker got started.
     WorkerStarted(NodeData),
     /// Signals a worker took too long to start and failed.
@@ -179,10 +179,10 @@ impl EventNotifier {
         self.0.call(ev).await;
     }
 
-    pub(crate) async fn supervisor_restarted_to_many_times(
+    pub(crate) async fn supervisor_restarted_too_many_times(
         &mut self,
         runtime_name: &str,
-        err: Arc<subtree::ToManyRestarts>,
+        err: Arc<root::TooManyRestarts>,
     ) {
         let ev = Event::SupervisorRestartedToManyTimes(
             NodeData {
@@ -523,7 +523,7 @@ impl EventAssert {
     }
 
     /// TODO
-    pub fn supervisor_restarted_to_many_times<S>(input_name0: S) -> EventAssert
+    pub fn supervisor_restarted_too_many_times<S>(input_name0: S) -> EventAssert
     where
         S: Into<String> + Clone,
     {

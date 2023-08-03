@@ -17,8 +17,10 @@ pub(crate) mod subtree;
 
 ////////////////////////////////////////////////////////////////////////////////
 
+pub(crate) type RuntimeName = String;
+
 type TerminationNotifier =
-    notifier::TerminationNotifier<String, task::TerminationMessage<TerminationMessage>>;
+    notifier::TerminationNotifier<RuntimeName, task::TerminationMessage<TerminationMessage>>;
 
 /// Represents an error reported on leaf or subtree when trying to spawn a
 /// task (green thread).
@@ -72,11 +74,11 @@ impl TerminationMessage {
                     .worker_runtime_failed(err.get_runtime_name(), err.clone())
                     .await
             }
-            TerminationMessage::Subtree(subtree::TerminationMessage::ToManyRestarts(
+            TerminationMessage::Subtree(subtree::TerminationMessage::TooManyRestarts(
                 to_many_restarts_err,
             )) => {
                 ev_notifier
-                    .supervisor_restarted_to_many_times(
+                    .supervisor_restarted_too_many_times(
                         to_many_restarts_err.get_runtime_name(),
                         to_many_restarts_err.clone(),
                     )
@@ -87,14 +89,16 @@ impl TerminationMessage {
     }
 }
 
-/// BLAH BLAH BLAH
+/// Represents a restart strategy used by a supervision tree whenever dealing
+/// with errors on supervised children.
 #[derive(Clone, Debug)]
-pub enum Restart {
-    /// BLAH
+pub enum Strategy {
+    /// Indicates that only the child that failed should get restarted.
     OneForOne,
-    /// BLAH
+    /// Indicates that all children should get restarted when one child fails.
     OneForAll,
-    /// BLAH
+    /// Indicates that the failing child and any other child started after it
+    /// should get restarted.
     RestForOne,
 }
 
@@ -116,6 +120,10 @@ impl Node {
             .start(ctx, ev_notifier, parent_name, Some(parent_chan))
             .await
             .map_err(|(start_err, spec_node)| (start_err, Node(spec_node)))
+    }
+
+    pub(crate) fn get_name(&self) -> &str {
+        self.0.get_name()
     }
 }
 
@@ -174,10 +182,10 @@ impl NodeSpec {
         }
     }
 
-    pub fn get_restart_strategy(&self) -> &Restart {
+    pub fn get_name(&self) -> &str {
         match self {
-            NodeSpec::Leaf(leaf_spec) => leaf_spec.get_restart_strategy(),
-            NodeSpec::Subtree(subtree_spec) => subtree_spec.get_restart_strategy(),
+            NodeSpec::Leaf(leaf_spec) => leaf_spec.get_name(),
+            NodeSpec::Subtree(subtree_spec) => subtree_spec.get_name(),
         }
     }
 }
@@ -210,6 +218,14 @@ impl RunningNode {
             Self::Subtree(subtree) => subtree.get_name(),
         }
     }
+
+    pub(crate) fn get_restart(&self) -> task::Restart {
+        match self {
+            Self::Leaf(leaf) => leaf.get_restart(),
+            Self::Subtree(subtree) => subtree.get_restart(),
+        }
+    }
+
     /// Executes the termination logic of this running node (leaf or subtree).
     pub(crate) async fn terminate(
         self,
@@ -227,13 +243,6 @@ impl RunningNode {
                 let result = result.map_err(TerminationMessage::Subtree);
                 (result, Node(NodeSpec::Subtree(subtree_spec)))
             }
-        }
-    }
-
-    pub(crate) fn get_restart_strategy(&self) -> &Restart {
-        match self {
-            RunningNode::Leaf(leaf) => leaf.get_restart_strategy(),
-            RunningNode::Subtree(subtree) => subtree.get_restart_strategy(),
         }
     }
 }

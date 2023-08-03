@@ -21,8 +21,10 @@ use super::running_leaf::*;
 /// Since: 0.0.0
 pub type StartNotifier = notifier::StartNotifier<anyhow::Error>;
 
-type TerminationNotifier =
-    notifier::TerminationNotifier<String, task::TerminationMessage<node::TerminationMessage>>;
+type TerminationNotifier = notifier::TerminationNotifier<
+    node::RuntimeName,
+    task::TerminationMessage<node::TerminationMessage>,
+>;
 
 /// Represents the specification of a worker `capataz::Node` in the supervision
 /// tree.
@@ -31,24 +33,26 @@ type TerminationNotifier =
 pub struct Spec {
     name: String,
     opts: Vec<Opt>,
-    task_spec: task::TaskSpec<String, anyhow::Error, node::TerminationMessage>,
-    restart_strategy: node::Restart,
+    task_spec: task::TaskSpec<node::RuntimeName, anyhow::Error, node::TerminationMessage>,
 }
 
 impl Spec {
     pub(crate) fn from_running_leaf(
         name: String,
         opts: Vec<Opt>,
-        task_spec: task::TaskSpec<String, anyhow::Error, node::TerminationMessage>,
-        restart_strategy: node::Restart,
+        task_spec: task::TaskSpec<node::RuntimeName, anyhow::Error, node::TerminationMessage>,
     ) -> Self {
         Self {
             name,
             opts,
             task_spec,
-            restart_strategy,
         }
     }
+
+    pub(crate) fn get_restart(&self) -> task::Restart {
+        self.task_spec.get_restart()
+    }
+
     /// Creates the specification of a worker `capataz::Node` (leaf node) in the
     /// supervision tree. This specification is used by the Capataz API to spawn
     /// an asynchronous future task that executes the given anonymous function.
@@ -87,8 +91,8 @@ impl Spec {
                         .await
                         .map(|_| {
                             // Transform a unit return into a String with the
-                            // runtime_name of the node, this way we can track the
-                            // leaf termination on the supervisor.
+                            // runtime_name of the node, this way we can track
+                            // the leaf termination on the supervisor.
                             runtime_name.clone()
                         })
                         .map_err(|err| {
@@ -111,20 +115,19 @@ impl Spec {
             name,
             task_spec,
             opts,
-            restart_strategy: node::Restart::OneForOne,
         }))
     }
 
     /// Creates the specification of a worker `capataz::Node` (leaf node) in the
     /// supervision tree. This method enhances the existing
-    /// `capataz::Worker::new` method by receiving an an extra parameter of type
+    /// `capataz::Worker::new` method by receiving an extra parameter of type
     /// `capataz::StartNotifier` in the provided annonymous function.
     ///
     /// The `capataz::StartNotifier` parameter must be used by API consumers to
     /// signal to the parent supervisor that the node is ready. A client may
     /// want to use this variant when their business logic requires the
     /// allocation of resources that do not initialize instantaneously. Failure
-    /// to use the `capataz::StartNotifier` to signal a strat may result in
+    /// to use the `capataz::StartNotifier` to signal a start may result in
     /// runtime errors indicating the supervision tree failed to start.
     ///
     /// Since: 0.0.0
@@ -169,7 +172,6 @@ impl Spec {
         }
         node::Node(node::NodeSpec::Leaf(Spec {
             name,
-            restart_strategy: node::Restart::OneForOne,
             task_spec,
             opts,
         }))
@@ -189,7 +191,6 @@ impl Spec {
             name,
             opts,
             task_spec,
-            restart_strategy,
         } = self;
 
         let runtime_name = node::build_runtime_name(parent_name, &name);
@@ -221,7 +222,6 @@ impl Spec {
                     name,
                     opts,
                     task_spec,
-                    restart_strategy,
                 };
                 Err((start_err, spec))
             }
@@ -240,7 +240,6 @@ impl Spec {
                     name,
                     opts,
                     task_spec,
-                    restart_strategy,
                 };
                 Err((StartError::StartFailed(start_err), spec))
             }
@@ -249,19 +248,13 @@ impl Spec {
                 // errors.
                 ev_notifier.worker_started(&runtime_name).await;
                 // Return the running worker to the API caller.
-                Ok(RunningLeaf::new(
-                    name,
-                    runtime_name,
-                    running_worker,
-                    opts,
-                    restart_strategy,
-                ))
+                Ok(RunningLeaf::new(name, runtime_name, running_worker, opts))
             }
         }
     }
 
-    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
-        &self.restart_strategy
+    pub(crate) fn get_name(&self) -> &str {
+        &self.name
     }
 
     /// Specifies how long a client API is willing to wait for the start of this

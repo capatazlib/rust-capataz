@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use thiserror::Error;
 
-use super::ToManyRestarts;
-use crate::node;
+use crate::node::{self, root};
 
 /// Represents an error reported by one of the child nodes at start time, it may
 /// also include some termination error if the previously started nodes fail to
@@ -96,7 +95,9 @@ pub enum TerminationMessage {
     #[error("{0}")]
     TerminationFailed(Arc<TerminationFailed>),
     #[error("{0}")]
-    ToManyRestarts(Arc<ToManyRestarts>),
+    TooManyRestarts(Arc<root::TooManyRestarts>),
+    #[error("{0}")]
+    StartErrorOnRestart(Arc<node::StartError>),
     #[error("start error already reported")]
     StartErrorAlreadyReported,
 }
@@ -105,7 +106,8 @@ impl TerminationMessage {
     pub fn get_runtime_name(&self) -> &str {
         match &self {
             Self::TerminationFailed(termination_err) => termination_err.get_runtime_name(),
-            Self::ToManyRestarts(to_many_restarts) => to_many_restarts.get_runtime_name(),
+            Self::TooManyRestarts(too_many_restarts) => too_many_restarts.get_runtime_name(),
+            Self::StartErrorOnRestart(start_err) => start_err.get_runtime_name(),
             Self::StartErrorAlreadyReported => {
                 unreachable!("invalid implementation; start error is never delivered via sup_chan")
             }
@@ -115,11 +117,16 @@ impl TerminationMessage {
     pub fn get_cause_err(self) -> anyhow::Error {
         match self {
             Self::TerminationFailed(termination_err) => anyhow::Error::new(termination_err),
-            Self::ToManyRestarts(to_many_restarts) => anyhow::Error::new(to_many_restarts),
+            Self::TooManyRestarts(too_many_restarts) => anyhow::Error::new(too_many_restarts),
+            Self::StartErrorOnRestart(start_err) => anyhow::Error::new(start_err),
             Self::StartErrorAlreadyReported => {
                 unreachable!("invalid implementation; start error is never delivered via sup_chan")
             }
         }
+    }
+
+    pub(crate) fn restart_failed(start_err: node::StartError) -> Self {
+        Self::StartErrorOnRestart(Arc::new(start_err))
     }
 
     pub(crate) fn termination_failed(
@@ -127,7 +134,7 @@ impl TerminationMessage {
         termination_err: Vec<node::TerminationMessage>,
         cleanup_err: Option<anyhow::Error>,
     ) -> Self {
-        TerminationMessage::TerminationFailed(Arc::new(TerminationFailed {
+        Self::TerminationFailed(Arc::new(TerminationFailed {
             runtime_name: runtime_name.to_owned(),
             termination_err,
             cleanup_err,

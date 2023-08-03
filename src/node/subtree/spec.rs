@@ -19,19 +19,19 @@ type TerminationNotifier =
 pub(crate) struct Spec {
     root_spec: root::Spec,
     opts: Vec<leaf::Opt>,
-    restart_strategy: node::Restart,
+    strategy: node::Strategy,
 }
 
 impl Spec {
     pub(crate) fn from_running_subtree(
         root_spec: root::Spec,
         opts: Vec<leaf::Opt>,
-        restart_strategy: node::Restart,
+        strategy: node::Strategy,
     ) -> Self {
         Self {
             root_spec,
             opts,
-            restart_strategy,
+            strategy,
         }
     }
 
@@ -39,7 +39,7 @@ impl Spec {
         Self {
             root_spec: spec,
             opts,
-            restart_strategy: node::Restart::OneForOne,
+            strategy: node::Strategy::OneForOne,
         }
     }
 
@@ -60,7 +60,7 @@ impl Spec {
         let Self {
             root_spec,
             opts,
-            restart_strategy,
+            strategy,
             ..
         } = self;
 
@@ -121,7 +121,7 @@ impl Spec {
                     let spec = Spec {
                         root_spec,
                         opts,
-                        restart_strategy,
+                        strategy,
                     };
                     Err((StartError::BuildFailed(build_err), spec))
                 }
@@ -137,7 +137,7 @@ impl Spec {
                     let spec = Spec {
                         root_spec,
                         opts,
-                        restart_strategy,
+                        strategy,
                     };
                     Err((StartError::StartFailed(start_err), spec))
                 }
@@ -150,7 +150,7 @@ impl Spec {
                         root_spec,
                         running_supervisor,
                         opts,
-                        restart_strategy,
+                        strategy,
                     ))
                 }
             }
@@ -158,7 +158,7 @@ impl Spec {
         .boxed()
     }
 
-    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
-        &self.restart_strategy
+    pub(crate) fn get_name(&self) -> &str {
+        self.root_spec.get_name()
     }
 }

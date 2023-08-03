@@ -9,9 +9,9 @@ use super::spec::*;
 pub(crate) struct RunningSubtree {
     runtime_name: String,
     root_spec: root::Spec,
-    task: task::RunningTask<String, StartError, node::TerminationMessage>,
+    task: task::RunningTask<node::RuntimeName, StartError, node::TerminationMessage>,
     opts: Vec<leaf::Opt>,
-    restart_strategy: node::Restart,
+    strategy: node::Strategy,
 }
 
 /// Internal value to allow RunningLeaf to implement the Debug trait
@@ -19,7 +19,7 @@ pub(crate) struct RunningSubtree {
 struct RunningSubtreeDebug {
     runtime_name: String,
     root_spec: root::Spec,
-    restart_strategy: node::Restart,
+    strategy: node::Strategy,
 }
 
 impl std::fmt::Debug for RunningSubtree {
@@ -27,7 +27,7 @@ impl std::fmt::Debug for RunningSubtree {
         let data = RunningSubtreeDebug {
             runtime_name: self.runtime_name.clone(),
             root_spec: self.root_spec.clone(),
-            restart_strategy: self.restart_strategy.clone(),
+            strategy: self.strategy.clone(),
         };
         data.fmt(format)
     }
@@ -37,16 +37,16 @@ impl RunningSubtree {
     pub(crate) fn new(
         runtime_name: String,
         root_spec: root::Spec,
-        task: task::RunningTask<String, StartError, node::TerminationMessage>,
+        task: task::RunningTask<node::RuntimeName, StartError, node::TerminationMessage>,
         opts: Vec<leaf::Opt>,
-        restart_strategy: node::Restart,
+        strategy: node::Strategy,
     ) -> Self {
         Self {
             runtime_name,
             root_spec,
             task,
             opts,
-            restart_strategy,
+            strategy,
         }
     }
 
@@ -58,22 +58,26 @@ impl RunningSubtree {
         &self.root_spec.get_name()
     }
 
+    pub(crate) fn get_restart(&self) -> task::Restart {
+        self.task.get_restart()
+    }
+
     /// Executes the termination logic of a supervision tree.
     pub(crate) async fn terminate(
         self,
         mut ev_notifier: EventNotifier,
     ) -> (Result<(), TerminationMessage>, Spec) {
         let runtime_name = self.get_runtime_name().to_owned();
-        // Discard the previous task_spec as the capataz recreates the
+        // Discard the previous task_spec as the capataz library recreates the
         // supervision tree node using the provided build nodes function.
         let (result, _task_spec) = self.task.terminate().await;
-        let spec = Spec::from_running_subtree(self.root_spec, self.opts, self.restart_strategy);
+        let spec = Spec::from_running_subtree(self.root_spec, self.opts, self.strategy);
 
         // Unfortunately, due to limitations of the mpsc API, we need to return
         // a general `node::TerminationMessage` from the task API. Because of
         // this, you'll see in the patterns bellow the usage of
-        // `node::TerminationMessage` rather than `TerminationMessage` type of this
-        // module.
+        // `node::TerminationMessage` rather than `TerminationMessage` type of
+        // this module.
         match result {
             // Ignore this case as the error has been notified elsewhere.
             Err(task::TerminationMessage::TaskFailureNotified { .. }) => {
@@ -106,18 +110,18 @@ impl RunningSubtree {
                             TerminationMessage::TerminationFailed(termination_err);
                         (Err(termination_err), spec)
                     }
-                    node::TerminationMessage::Subtree(TerminationMessage::ToManyRestarts(
-                        to_many_restarts_err,
+                    node::TerminationMessage::Subtree(TerminationMessage::TooManyRestarts(
+                        too_many_restarts_err,
                     )) => {
                         // Report the supervisor termination failure
                         ev_notifier
-                            .supervisor_restarted_to_many_times(
+                            .supervisor_restarted_too_many_times(
                                 &runtime_name,
-                                to_many_restarts_err.clone(),
+                                too_many_restarts_err.clone(),
                             )
                             .await;
                         let termination_err =
-                            TerminationMessage::ToManyRestarts(to_many_restarts_err);
+                            TerminationMessage::TooManyRestarts(too_many_restarts_err);
                         (Err(termination_err), spec)
                     }
                     other_err => {
@@ -137,9 +141,5 @@ impl RunningSubtree {
                 (Ok(()), spec)
             }
         }
-    }
-
-    pub(crate) fn get_restart_strategy(&self) -> &node::Restart {
-        &self.restart_strategy
     }
 }

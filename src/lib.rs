@@ -21,20 +21,21 @@ mod task;
 
 /// Provides an API to notify and collect events in the supervision tree.
 mod events;
+pub use events::Event;
+pub use events::EventListener;
 
 /// Contains the types and logic to create, start and terminate nodes in the
 /// supervision tree.
 mod node;
-pub use events::Event;
-pub use events::EventListener;
 pub use node::leaf::Opt as WorkerOpt;
 pub use node::leaf::Spec as Worker;
 pub use node::leaf::StartNotifier;
+pub use node::root::opts::StartOrder;
 pub use node::root::Opt as SupervisorOpt;
-pub use node::root::Root as StartOrder;
 pub use node::root::Root as Supervisor;
 pub use node::root::Spec as SupervisorSpec;
 pub use node::Node;
+pub use node::Strategy;
 pub use std::time::Duration;
 
 #[cfg(test)]
@@ -47,12 +48,4 @@ mod tests {
     mod termination_tests;
     mod timeout_tests;
     mod workers;
-
-    // // /*
-    // // #[tokio::test]
-    // // async fn test_single_level_worker_transient_restart()
-
-    // // #[tokio::test]
-    // // async fn test_single_level_worker_temporary_restart()
-    // // */
 }

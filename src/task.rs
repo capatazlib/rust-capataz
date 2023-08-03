@@ -65,11 +65,26 @@ pub enum Startup {
     Timeout(Duration),
 }
 
+#[derive(Debug, Clone)]
+pub enum Restart {
+    /// A `Permanent` value specifies that the thread should be restarted any
+    /// time it terminates (with an error or not).
+    Permanent,
+    /// A `Transient` value specifies that the thread should be restarted if and
+    /// only if the thread fails with an error. If the thread finishes without
+    /// errors it is not restarted again.
+    Transient,
+    /// A `Temporary` value specifies that the thread should not be restarted,
+    /// not even when the thread fails.
+    Temporary,
+}
+
 /// Represents a task specification; it serves as a template for the
 /// construction of tasks.
 pub struct TaskSpec<A, SE, TE> {
     startup: Startup,
     shutdown: Shutdown,
+    restart: Restart,
     routine:
         Box<dyn (FnMut(Context, StartNotifier<SE>) -> BoxFuture<'static, Result<A, TE>>) + Send>,
 }
@@ -186,11 +201,15 @@ where
                     }
                 }
             }
-            // Client doesn't care if this task takes time to terminate.
+            // Client doesn't care if this task takes infinity to terminate.
             Shutdown::Indefinitely => wait_result.await,
         };
 
         (task_result, spec)
+    }
+
+    pub fn get_restart(&self) -> Restart {
+        self.spec.restart.clone()
     }
 }
 
@@ -235,6 +254,7 @@ where
         TaskSpec {
             startup: Startup::Indefinitely,
             shutdown: Shutdown::Indefinitely,
+            restart: Restart::Permanent,
             routine: Box::new(routine),
         }
     }
@@ -249,6 +269,12 @@ where
     /// task.
     pub fn with_startup(&mut self, startup: Startup) {
         self.startup = startup;
+    }
+
+    /// Specifies how the parent supervisor should restart this worker after an
+    /// error is encountered.
+    pub fn with_restart(&mut self, restart: Restart) {
+        self.restart = restart;
     }
 
     /// Spawns a new task that executes this `TaskSpec`'s routine `Future`.
@@ -271,6 +297,7 @@ where
             mut routine,
             startup,
             shutdown,
+            restart,
             ..
         } = self;
 
@@ -294,6 +321,7 @@ where
                 Err(_) => {
                     let termination_err = TaskAborted;
                     if let Some(ref parent_chan) = &parent_chan {
+                        // notify parent supervisor
                         parent_chan.report_err(termination_err).await?;
                         Err(TaskFailureNotified)
                     } else {
@@ -303,6 +331,7 @@ where
                 Ok(Err(err)) => {
                     let termination_err = TaskFailed { err };
                     if let Some(ref parent_chan) = &parent_chan {
+                        // notify parent supervisor
                         parent_chan.report_err(termination_err).await?;
                         Err(TaskFailureNotified)
                     } else {
@@ -311,6 +340,7 @@ where
                 }
                 Ok(Ok(result)) => {
                     if let Some(ref parent_chan) = &parent_chan {
+                        // notify parent supervisor
                         let result = parent_chan.report_ok(result).await;
                         match result {
                             Ok(_) => Err(TaskFailureNotified),
@@ -330,6 +360,7 @@ where
         let spec = TaskSpec {
             startup: startup.clone(),
             shutdown,
+            restart,
             routine,
         };
 
@@ -391,6 +422,10 @@ where
             .await
             .map_err(|(err, _)| err)
     }
+
+    pub(crate) fn get_restart(&self) -> Restart {
+        self.restart.clone()
+    }
 }
 
 #[cfg(test)]
@@ -423,6 +458,7 @@ mod tests {
         let result = task.start_(&ctx, Some(sender)).await;
         match result {
             Ok(task) => {
+                // task started without any errors, end of the test.
                 let _ = task.terminate();
             }
             Err(err) => {
@@ -449,7 +485,7 @@ mod tests {
         match result {
             Ok(task) => {
                 let _ = task.terminate();
-                assert!(false, "expected start error; got task")
+                assert!(false, "expected start error; got successful result")
             }
             Err(StartError::BusinessLogicFailed(err)) => {
                 assert_eq!("task start failure", format!("{}", err))
