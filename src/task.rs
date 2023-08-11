@@ -45,11 +45,11 @@ where
 /// of a `RunningTask`.
 #[derive(Debug, Clone)]
 pub enum Shutdown {
-    /// A `Shutdown` value that specifies the parent supervisor must wait
-    /// indefinitely for the task task to stop executing.
+    /// Specifies the parent supervisor must wait indefinitely for the task to
+    /// stop executing.
     Indefinitely,
-    /// A `Shutdown` value that indicates the time that the supervisor will wait
-    /// before "force-killing" a RunningTask task.
+    /// Specifies the time that the parent supervisor must wait before
+    /// "force-killing" a task.
     Timeout(Duration),
 }
 
@@ -57,11 +57,11 @@ pub enum Shutdown {
 /// a `Task`.
 #[derive(Debug, Clone)]
 pub enum Startup {
-    /// A `Shutdown` value that specifies the parent supervisor must wait
-    /// indefinitely for the task to start executing.
+    /// Specifies the parent supervisor must wait indefinitely for the task to
+    /// start executing.
     Indefinitely,
-    /// A `Shutdown` value that indicates the time that the supervisor will wait
-    /// before halting the bootstrap of a `Task`.
+    /// Specifies the time that the supervisor will wait before halting the
+    /// bootstrap of a `Task`.
     Timeout(Duration),
 }
 
@@ -80,7 +80,7 @@ pub enum Restart {
 }
 
 /// Represents a task specification; it serves as a template for the
-/// construction of tasks.
+/// construction of running tasks.
 pub struct TaskSpec<A, SE, TE> {
     startup: Startup,
     shutdown: Shutdown,
