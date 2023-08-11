@@ -66,16 +66,16 @@ pub enum Startup {
 }
 
 #[derive(Debug, Clone)]
+/// A value that indicates if a task should get restarted by a supervisor.
 pub enum Restart {
-    /// A `Permanent` value specifies that the thread should be restarted any
-    /// time it terminates (with an error or not).
+    /// Specifies that the task should be restarted any time it terminates (with
+    /// an error or not).
     Permanent,
-    /// A `Transient` value specifies that the thread should be restarted if and
-    /// only if the thread fails with an error. If the thread finishes without
-    /// errors it is not restarted again.
+    /// Specifies that the task should be restarted if and only if it fails with
+    /// an error. If the task finishes without errors it is not restarted again.
     Transient,
-    /// A `Temporary` value specifies that the thread should not be restarted,
-    /// not even when the thread fails.
+    /// Specifies that the task should not be restarted, not even when if it
+    /// terminates with a failure.
     Temporary,
 }
 

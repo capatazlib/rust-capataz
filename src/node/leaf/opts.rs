@@ -31,3 +31,8 @@ impl Opt {
         self.0(spec)
     }
 }
+
+/// Changes the restart strategy of a Node
+pub fn with_restart(restart: task::Restart) -> Opt {
+    return Opt::new(move |spec| spec.with_restart(restart.clone()));
+}

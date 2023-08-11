@@ -30,9 +30,11 @@ mod node;
 /// Contains the types and logic to manage a supervisor.
 mod supervisor;
 
+pub use task::Restart;
+
 pub use node::leaf::Opt as WorkerOpt;
 pub use node::leaf::Spec as Worker;
-pub use node::leaf::StartNotifier;
+pub use node::leaf::{with_restart, StartNotifier};
 pub use node::Node;
 pub use node::Strategy;
 pub use std::time::Duration;
