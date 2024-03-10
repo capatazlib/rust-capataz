@@ -92,7 +92,7 @@ impl Spec {
     pub fn new<S, F>(name: S, mut opts: Vec<Opt>, mut build_nodes_fn: F) -> Self
     where
         S: Into<String>,
-        F: FnMut() -> Vec<Node> + Send + Sync + 'static,
+        F: (FnMut() -> Vec<Node>) + Send + Sync + 'static,
     {
         let name = name.into();
         let build_nodes_fn = move || {
