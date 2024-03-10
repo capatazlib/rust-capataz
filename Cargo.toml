@@ -1,5 +1,5 @@
 [package]
-name = "rust-capataz"
+name = "capataz"
 version = "0.0.0"
 edition = "2018"
 
