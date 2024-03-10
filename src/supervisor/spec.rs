@@ -287,10 +287,11 @@ impl Spec {
                             let node_name = node::to_node_name(err.get_runtime_name());
                             match restart_manager.register_error(anyhow::Error::new(err)) {
                                 Ok(new_restart_manager) => {
+                                    let was_error = true;
                                     restart_manager = new_restart_manager;
                                     running_nodes
                                         .handle_node_termination(
-                                            true,
+                                            was_error,
                                             ev_notifier.clone(),
                                             runtime_name,
                                             parent_chan.clone(),
