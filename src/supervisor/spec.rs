@@ -261,7 +261,7 @@ impl Spec {
                         Some(Ok(node_runtime_name)) => {
                             let node_name = node::to_node_name(&node_runtime_name);
                             ev_notifier.worker_terminated(&node_runtime_name).await;
-                            running_nodes
+                            let has_any_children = running_nodes
                                 .handle_node_termination(
                                     false,
                                     ev_notifier.clone(),
@@ -271,6 +271,10 @@ impl Spec {
                                     &node_name,
                                 )
                                 .await?;
+                            if !has_any_children {
+                                sup_chan.close();
+                                return Ok(runtime_name.to_owned());
+                            }
                         }
                         Some(Err(task::TerminationMessage::TaskPanic { .. })) => {
                             todo!("panic handling logic pending")

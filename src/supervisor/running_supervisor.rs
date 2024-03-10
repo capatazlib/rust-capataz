@@ -221,7 +221,7 @@ impl RunningNodes {
         parent_chan: TerminationNotifier,
         strategy: Strategy,
         node_name: &str,
-    ) -> Result<(), subtree::TerminationMessage> {
+    ) -> Result<bool, subtree::TerminationMessage> {
         // Fetch the collection of running nodes and take ownership of the
         // failed node to restart.
         if let Some(running_node) = self.running_nodes.remove(node_name) {
@@ -233,14 +233,17 @@ impl RunningNodes {
 
             // short-circuit if we should not restart the subtree
             if !should_restart {
-                return Ok(());
+                // check if there are any pending running_nodes, if not we
+                // should indicate termination of the supervisor tree
+                let should_continue = self.running_nodes.len() > (0 as usize);
+                return Ok(should_continue);
             }
 
             // Execute the restart logic depending on the RestartStrategy of
             // this node.
             match strategy {
-                node::Strategy::OneForOne => {
-                    self.one_for_one_restart(
+                node::Strategy::OneForOne => self
+                    .one_for_one_restart(
                         ev_notifier,
                         parent_name,
                         parent_chan,
@@ -248,9 +251,9 @@ impl RunningNodes {
                         running_node,
                     )
                     .await
-                }
-                node::Strategy::OneForAll => {
-                    self.one_for_all_restart(
+                    .map(|_| true),
+                node::Strategy::OneForAll => self
+                    .one_for_all_restart(
                         ev_notifier,
                         parent_name,
                         parent_chan,
@@ -258,7 +261,7 @@ impl RunningNodes {
                         running_node,
                     )
                     .await
-                }
+                    .map(|_| true),
                 restart => todo!("pending restart strategy implementation: {:?}", restart),
             }
         } else {
