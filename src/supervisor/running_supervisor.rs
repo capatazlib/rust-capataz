@@ -365,4 +365,16 @@ impl Supervisor {
         let (result, _subtree_spec) = self.running_subtree.terminate(self.ev_notifier).await;
         (result, spec)
     }
+
+    /// Blocks the current thread, waiting for the supervision tree to
+    /// terminate.
+    ///
+    /// Since: 0.0.0
+    pub async fn wait(self) -> (Result<(), subtree::TerminationMessage>, Spec) {
+        let spec = self.spec;
+        // Every subtree restart re-creates all the child nodes, let us ignore
+        // the previously created subtree spec.
+        let (result, _subtree_spec) = self.running_subtree.wait(self.ev_notifier).await;
+        (result, spec)
+    }
 }

@@ -208,6 +208,46 @@ where
         (task_result, spec)
     }
 
+    /// Executes the waiting logic of the supervisor routine and waits for an
+    /// eventual termination.
+    pub(crate) async fn wait(self) -> (Result<A, TerminationMessage<TE>>, TaskSpec<A, SE, TE>) {
+        let Self {
+            kill_handle,
+            join_handle,
+            spec,
+            ..
+        } = self;
+
+        // Handle the JoinHandle API result once for Indefinitely and Timeout
+        // shutdown branches.
+        let wait_result = Self::wait_handle(join_handle);
+
+        let task_result = match &spec.shutdown {
+            // Wait for a duration of time
+            Shutdown::Timeout(wait_duration) => {
+                // Create context value with the shutdown timeout to do a select
+                // between the JoinHandle await and the context timeout.
+                let ctx = Context::new().with_timeout(wait_duration.clone());
+                tokio::select! {
+                    _ = ctx.done() => {
+                        // Timeout duration has been reached, force-kill the
+                        // routine.
+                        kill_handle.abort();
+                        Err(TerminationMessage::TaskForcedKilled)
+                    }
+                    join_result = wait_result => {
+                        // Task finished before the timeout, return result
+                        join_result
+                    }
+                }
+            }
+            // Client doesn't care if this task takes infinity to terminate.
+            Shutdown::Indefinitely => wait_result.await,
+        };
+
+        (task_result, spec)
+    }
+
     pub fn get_restart(&self) -> Restart {
         self.spec.restart.clone()
     }
