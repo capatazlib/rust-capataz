@@ -88,7 +88,7 @@ impl EventListener {
     }
 
     /// Creates an EventListener that does nothing
-    pub(crate) fn empty() -> Self {
+    pub fn empty() -> Self {
         Self(None)
     }
 
