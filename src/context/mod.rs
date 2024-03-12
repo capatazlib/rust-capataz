@@ -30,7 +30,7 @@ pub struct Context {
     // allow multiple worker routines to listen to the `Context` future, for
     // that we use the `Shared` wrapper.
     done: Shared<BoxFuture<'static, Result<(), Error>>>,
-    parent_name: String,
+    runtime_name: String,
 }
 
 impl Context {
@@ -42,20 +42,20 @@ impl Context {
             // it on `Shared` value to allow mutliple reads and cheap
             // clones.
             done: pending().boxed().shared(),
-            parent_name: "".to_owned(),
+            runtime_name: "".to_owned(),
         }
     }
 
-    /// Returns the parent_name stored in this `Context` record.
-    pub fn get_parent_name(&self) -> &str {
-        &self.parent_name
+    /// Returns the runtime_name stored in this `Context` record.
+    pub fn get_runtime_name(&self) -> &str {
+        &self.runtime_name
     }
 
     /// Clones a given `Context` and transforms it into one that contains the
     /// specified parent name.
-    pub(crate) fn with_parent_name(&self, parent_name: &str) -> Self {
+    pub(crate) fn with_runtime_name(&self, runtime_name: &str) -> Self {
         let mut ctx = self.clone();
-        ctx.parent_name = parent_name.to_owned();
+        ctx.runtime_name = runtime_name.to_owned();
         ctx
     }
 
@@ -70,8 +70,8 @@ impl Context {
 
         let (done, aborter) = abortable(self.done.clone());
         let done = done.map(to_context_err).boxed().shared();
-        let parent_name = self.parent_name.clone();
-        (Self { done, parent_name }, aborter)
+        let runtime_name = self.runtime_name.clone();
+        (Self { done, runtime_name }, aborter)
     }
 
     /// Clones a given `Context` and transforms it into one that can time out
@@ -86,8 +86,8 @@ impl Context {
 
         let done = timeout(d, self.done.clone());
         let done = done.map(to_context_err).boxed().shared();
-        let parent_name = self.parent_name.clone();
-        Self { done, parent_name }
+        let runtime_name = self.runtime_name.clone();
+        Self { done, runtime_name }
     }
 
     /// Returns a future that is used on `select!` statements to asses if we

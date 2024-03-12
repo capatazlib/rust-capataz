@@ -364,7 +364,7 @@ impl Spec {
             Ok(nodes) => {
                 // Start child nodes in the specified order.
                 // TODO: add LeftToRight and RightToLeft support
-                let node_ctx = Context::new().with_parent_name(&runtime_name);
+                let node_ctx = Context::new().with_runtime_name(&runtime_name);
 
                 let result = nodes
                     .start(

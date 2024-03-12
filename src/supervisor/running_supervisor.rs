@@ -122,7 +122,7 @@ impl RunningNodes {
 
             // Create a new context with the appropiate parent_name
             let ctx = Context::new();
-            let ctx = ctx.with_parent_name(parent_name);
+            let ctx = ctx.with_runtime_name(parent_name);
 
             //
             let node_names = match self.start_order {
@@ -180,7 +180,7 @@ impl RunningNodes {
 
         // Create a new context with the appropiate parent_name
         let ctx = Context::new();
-        let ctx = ctx.with_parent_name(parent_name);
+        let ctx = ctx.with_runtime_name(parent_name);
 
         // Loop on the worker creation until surpassing error
         // tolerance or the node starts without an error.

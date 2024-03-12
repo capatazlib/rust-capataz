@@ -81,13 +81,13 @@ impl Spec {
         let task_name = name.clone();
         let mut task_spec =
             task::TaskSpec::new_with_start(move |ctx: Context, start_notifier: StartNotifier| {
-                let parent_name = ctx.get_parent_name();
+                let parent_name = ctx.get_runtime_name();
                 let runtime_name = node::build_runtime_name(parent_name, &task_name);
                 let f_lock = f_lock.clone();
                 async move {
                     let mut f = f_lock.lock().await;
                     start_notifier.success();
-                    f(ctx)
+                    f(ctx.with_runtime_name(&runtime_name))
                         .await
                         .map(|_| {
                             // Transform a unit return into a String with the
@@ -143,11 +143,11 @@ impl Spec {
         let mut task_spec =
             task::TaskSpec::new_with_start(move |ctx: Context, start_notifier: StartNotifier| {
                 let f_lock = f_lock.clone();
-                let parent_name = ctx.get_parent_name();
+                let parent_name = ctx.get_runtime_name();
                 let runtime_name = node::build_runtime_name(parent_name, &task_name);
                 async move {
                     let mut f = f_lock.lock().await;
-                    f(ctx, start_notifier)
+                    f(ctx.with_runtime_name(&runtime_name), start_notifier)
                         .await
                         .map(|_| {
                             // Transform a unit return into a String with the
