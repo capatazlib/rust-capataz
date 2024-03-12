@@ -1,11 +1,11 @@
 use either::Either;
 use std::collections::HashMap;
 
+use crate::context::Context;
 use crate::events::EventNotifier;
 use crate::node::{self, subtree, RunningNode, Strategy};
 use crate::supervisor::opts::StartOrder;
 use crate::task::Restart;
-use crate::Context;
 
 use super::cleanup::*;
 use super::spec::*;
@@ -18,8 +18,8 @@ use super::spec::*;
 pub(crate) struct RunningNodes {
     // indicates how nodes should get started/terminated
     start_order: StartOrder,
-    // restart indicates what is the restart strategy for the nodes
-    strategy: Strategy,
+    // indicates what is the restart strategy for the nodes
+    // strategy: Strategy,
     // vector to keep track of the initial node order
     nodes_ix: Vec<node::RuntimeName>,
     // hashmap with nodes mapped by names, used for easy lookup
@@ -32,7 +32,7 @@ pub(crate) struct RunningNodes {
 impl RunningNodes {
     pub(crate) fn new(
         start_order: StartOrder,
-        strategy: Strategy,
+        _strategy: Strategy,
         input_nodes: Vec<RunningNode>,
         cleanup: CleanupFn,
     ) -> Self {
@@ -46,7 +46,7 @@ impl RunningNodes {
 
         Self {
             start_order,
-            strategy,
+            // strategy,
             nodes_ix,
             running_nodes,
             cleanup,

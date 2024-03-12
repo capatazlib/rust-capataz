@@ -39,7 +39,7 @@ type StartNotifier = notifier::StartNotifier<subtree::StartError>;
 /// Represents the specification of a static supervision tree; it serves as a
 /// template for the construction of a runtime supervision tree.
 ///
-/// With a `capataz::SupervisorSpec` value you may configure settings like:
+/// With a `supervisor::Spec` value you may configure settings like:
 ///
 /// * The child nodes (workers or sub-supervisors) you want to spawn when
 ///   your application starts.
@@ -56,8 +56,8 @@ pub struct Spec {
     build_nodes_fn: Arc<Mutex<BuildNodesFn>>,
     pub(crate) start_order: StartOrder,
     pub(crate) strategy: Strategy,
-    max_allowed_restarts: u32,
-    restart_window: time::Duration,
+    pub(crate) max_allowed_restarts: u32,
+    pub(crate) restart_window: time::Duration,
 }
 
 impl fmt::Debug for Spec {
@@ -72,13 +72,12 @@ impl fmt::Debug for Spec {
 }
 
 impl Spec {
-    /// Creates a `capataz::SupervisorSpec` value using an anonymous function
-    /// that build the nodes that the `capataz::Supervisor` will run and
-    /// monitor.
+    /// Creates a `supervisor::Spec` value using an anonymous function that
+    /// build the nodes that the `capataz::Supervisor` will run and monitor.
     ///
     /// If you need to allocate a resource that is going to be shared across
     /// multiple child nodes (e.g. a database connection), you may want to use
-    /// `capataz::SupervisorSpec::new_with_cleanup` instead.
+    /// `supervisor::Spec::new_with_cleanup` instead.
     ///
     /// Since: 0.0.0
     pub fn new<S, F>(name: S, mut opts: Vec<Opt>, mut build_nodes_fn: F) -> Self
@@ -109,8 +108,8 @@ impl Spec {
         spec
     }
 
-    /// Similar to `capataz::SupervisorSpec::new`, this function creates a
-    /// `capataz::SupervisorSpec` using an anonymous function that builds the
+    /// Similar to `supervisor::Spec::new`, this function creates a
+    /// `supervisor::Spec` using an anonymous function that builds the
     /// nodes that is going to run and monitor, as well as a resource allocation
     /// with a proper cleanup strategy.
     ///
@@ -128,7 +127,9 @@ impl Spec {
     /// child nodes that use a shared Redis client.
     ///
     /// ```ignore
-    /// capataz::SupervisorSpec::new_with_cleanup("my-supervisor", vec![], || {
+    /// use capataz::prelude::*;
+    ///
+    /// supervisor::Spec::new_with_cleanup("my-supervisor", vec![], || {
     ///   // Create the redis client. Note the `?` to deal with errors.
     ///   let client = std::sync::Arc::new(redis::Client::open("redis://127.0.0.1")?);
     ///
@@ -181,7 +182,7 @@ impl Spec {
         spec
     }
 
-    /// Transforms this `capataz::SupervisorSpec` into a subtree `capataz::Node`
+    /// Transforms this `supervisor::Spec` into a subtree `capataz::Node`
     /// with some node configuration.
     ///
     /// Since: 0.0.0
@@ -189,7 +190,7 @@ impl Spec {
         subtree::Spec::new(self, opts).to_node()
     }
 
-    /// Returns the name associated to this `capataz::SupervisorSpec`.
+    /// Returns the name associated to this `supervisor::Spec`.
     ///
     /// Since: 0.0.0
     pub fn get_name(&self) -> &str {
@@ -414,13 +415,13 @@ impl Spec {
         }
     }
 
-    /// Spawns all the nodes in this `capataz::SupervisorSpec` and returns a
+    /// Spawns all the nodes in this `supervisor::Spec` and returns a
     /// `capataz::Supervisor`.
     ///
     /// A `capataz::Supervisor` is a tree of workers and/or supervisors
     /// (sub-trees). This method spawns the workers (leaf) tasks first and then
     /// continues spawning nodes up in the tree heriarchy. Depending on the
-    /// `capataz::SupervisorSpec` configuration, the start order will be in
+    /// `supervisor::Spec` configuration, the start order will be in
     /// pre-order (left to right) or post-order (right to left).
     ///
     /// ### Tree initialization
@@ -464,45 +465,6 @@ impl Spec {
             }
         }
     }
-
-    /// Specifies the start and termination order in of the child nodes for a
-    /// given `capataz::SupervisorSpec`.
-    ///
-    /// If this configuration option is not specified, the default value
-    /// is `capataz::StartOrder::LeftToRight`
-    ///
-    /// Since: 0.0.0
-    pub fn with_start_order(order: StartOrder) -> Opt {
-        Opt::new(move |spec| spec.start_order = order.clone())
-    }
-
-    /// Specifies the restart tolerance for the child nodes of a
-    /// given `capataz::SupervisorSpec`.
-    ///
-    /// If this configuration option is not specified, the default value is one
-    /// error every five seconds.
-    ///
-    /// Since: 0.0.0
-    pub fn with_restart_tolerance(
-        max_allowed_restarts: u32,
-        restart_window: time::Duration,
-    ) -> Opt {
-        Opt::new(move |spec| {
-            spec.max_allowed_restarts = max_allowed_restarts;
-            spec.restart_window = restart_window.clone();
-        })
-    }
-
-    /// Specifies how children nodes of a given `capataz::SupervisorSpec`. get
-    /// restarted when one of the nodes fails.
-    ///
-    /// If this configuration option is not specified, the default value is a
-    /// "one for one" restart strategy.
-    ///
-    /// Since: 0.0.0
-    pub fn with_strategy(restart: Strategy) -> Opt {
-        Opt::new(move |spec| spec.strategy = restart.clone())
-    }
 }
 
 impl<F> std::convert::From<(Vec<Node>, F)> for Nodes
@@ -515,7 +477,7 @@ where
 }
 
 // Skip this implementation, as we want to enforce using the method
-// `SupervisorSpec::new` when creating `SupervisorSpec` values that do not
+// `supervisor::Spec::new` when creating `supervisor::Spec` values that do not
 // require a cleanup logic.
 //
 // impl std::convert::From<Vec<Node>> for Nodes {
@@ -528,7 +490,7 @@ where
 /// resource cleanup strategy). API clients usually won't create values of this
 /// type directly, but rather use it's multiple `From` instances.
 ///
-/// See `SupervisorSpec::new_with_cleanup` for more details.
+/// See `supervisor::Spec::new_with_cleanup` for more details.
 ///
 /// Since: 0.0.0
 pub struct Nodes {

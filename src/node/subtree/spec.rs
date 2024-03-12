@@ -48,7 +48,7 @@ impl Spec {
         node::Node(node::NodeSpec::Subtree(self))
     }
 
-    // Executes the `capataz::SupervisorSpec` run logic in a new spawned task.
+    // Executes the `supervisor::Spec` run logic in a new spawned task.
     pub(crate) fn start(
         self,
         ctx: Context,
@@ -163,7 +163,7 @@ impl Spec {
         .boxed()
     }
 
-    pub(crate) fn get_name(&self) -> &str {
-        self.spec.get_name()
-    }
+    // pub(crate) fn get_name(&self) -> &str {
+    //     self.spec.get_name()
+    // }
 }

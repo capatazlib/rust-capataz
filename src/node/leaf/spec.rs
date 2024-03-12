@@ -13,10 +13,10 @@ use super::opts::*;
 use super::running_leaf::*;
 
 /// Responsible of providing a start notification to a parent supervisor. Users
-/// of the `capataz::Worker::new_with_start` receive a value of this type and must
+/// of the `worker::Spec::new_with_start` receive a value of this type and must
 /// use it to indicate that the start either succeeded or failed.
 ///
-/// See `capataz::Worker::new_with_start` for more details.
+/// See `worker::Spec::new_with_start` for more details.
 ///
 /// Since: 0.0.0
 pub type StartNotifier = notifier::StartNotifier<anyhow::Error>;
@@ -49,9 +49,9 @@ impl Spec {
         }
     }
 
-    pub(crate) fn get_restart(&self) -> task::Restart {
-        self.task_spec.get_restart()
-    }
+    // pub(crate) fn get_restart(&self) -> task::Restart {
+    //     self.task_spec.get_restart()
+    // }
 
     /// Creates the specification of a worker `capataz::Node` (leaf node) in the
     /// supervision tree. This specification is used by the Capataz API to spawn
@@ -120,7 +120,7 @@ impl Spec {
 
     /// Creates the specification of a worker `capataz::Node` (leaf node) in the
     /// supervision tree. This method enhances the existing
-    /// `capataz::Worker::new` method by receiving an extra parameter of type
+    /// `worker::Spec::new` method by receiving an extra parameter of type
     /// `capataz::StartNotifier` in the provided annonymous function.
     ///
     /// The `capataz::StartNotifier` parameter must be used by API consumers to
@@ -207,7 +207,7 @@ impl Spec {
 
             // The supervised task took too long to signal a start happened, so
             // we return a StartError to our parent node, this will ultimately
-            // result in the `SupervisorSpec` start method to fail.
+            // result in the `supervisor::Spec` start method to fail.
             Err((task::StartError::StartTimeoutError(_), task_spec)) => {
                 let start_err = Arc::new(StartTimedOut::new(&runtime_name));
                 // Signal the event system that the worker failed to get started
@@ -253,33 +253,7 @@ impl Spec {
         }
     }
 
-    pub(crate) fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    /// Specifies how long a client API is willing to wait for the start of this
-    /// `capataz::Node`.
-    ///
-    /// If this configuration option is not specified, there is no timeout for
-    /// the node start.
-    ///
-    /// Since: 0.0.0
-    pub fn with_start_timeout(duration: std::time::Duration) -> Opt {
-        Opt::new(move |task| {
-            task.with_startup(task::Startup::Timeout(duration.clone()));
-        })
-    }
-
-    /// Specifies how long a client API is willing to wait for the termination
-    /// of this `capataz::Node`.
-    ///
-    /// If this configuration option is not specified, there is no timeout
-    /// for the node termination.
-    ///
-    /// Since: 0.0.0
-    pub fn with_termination_timeout(duration: std::time::Duration) -> Opt {
-        Opt::new(move |task| {
-            task.with_shutdown(task::Shutdown::Timeout(duration.clone()));
-        })
-    }
+    // pub(crate) fn get_name(&self) -> &str {
+    //     &self.name
+    // }
 }

@@ -1,13 +1,14 @@
 use tokio::time;
 
+use crate::prelude::*;
 use crate::tests::workers::{wait_done_worker, worker_trigger};
-use crate::{Context, EventAssert, EventListener, Strategy, SupervisorSpec};
+use crate::{Context, EventListener};
 
 #[tokio::test]
 async fn test_one_for_one_single_level_worker_restart_with_failure() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -29,7 +30,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have started");
@@ -41,7 +42,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
     ev_buffer
         .wait_till(
             EventAssert::worker_started("/root/worker"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("worker should have re-started");
@@ -53,7 +54,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have terminated");
@@ -77,7 +78,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
 async fn test_one_for_one_single_level_worker_restart_with_ok_termination() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -100,7 +101,7 @@ async fn test_one_for_one_single_level_worker_restart_with_ok_termination() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have started");
@@ -112,7 +113,7 @@ async fn test_one_for_one_single_level_worker_restart_with_ok_termination() {
     ev_buffer
         .wait_till(
             EventAssert::worker_started("/root/worker"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("worker should have re-started");
@@ -124,7 +125,7 @@ async fn test_one_for_one_single_level_worker_restart_with_ok_termination() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have terminated");
@@ -148,11 +149,11 @@ async fn test_one_for_one_single_level_worker_restart_with_ok_termination() {
 async fn test_one_for_one_single_level_worker_too_many_restart() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new(
+    let spec = supervisor::Spec::new(
         "root",
-        vec![SupervisorSpec::with_restart_tolerance(
+        vec![supervisor::with_restart_tolerance(
             0,
-            time::Duration::from_secs(5),
+            Duration::from_secs(5),
         )],
         move || {
             // clone the signaler reference every time we restart the
@@ -221,13 +222,12 @@ async fn test_one_for_one_single_level_worker_too_many_restart() {
 async fn test_one_for_one_multi_level_worker_too_many_restart_recovery() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // Build no tolerance for child sub-tree
-        let restart_tolerance =
-            SupervisorSpec::with_restart_tolerance(0, time::Duration::from_secs(5));
+        let restart_tolerance = supervisor::with_restart_tolerance(0, Duration::from_secs(5));
         let subtree_listener = trigger_listener.clone();
 
-        let subtree_spec = SupervisorSpec::new("subtree", vec![restart_tolerance], move || {
+        let subtree_spec = supervisor::Spec::new("subtree", vec![restart_tolerance], move || {
             let subtree_listener = subtree_listener.clone();
             let max_err_count = 1;
             let worker = subtree_listener.to_fail_runtime_worker("worker-2", vec![], max_err_count);
@@ -329,16 +329,15 @@ async fn test_one_for_one_multi_level_worker_too_many_restart_recovery() {
 async fn test_one_for_all_single_level_worker_restart_with_success() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
-        let restart_tolerance =
-            SupervisorSpec::with_restart_tolerance(1, time::Duration::from_secs(5));
+    let spec = supervisor::Spec::new("root", vec![], move || {
+        let restart_tolerance = supervisor::with_restart_tolerance(1, time::Duration::from_secs(5));
 
-        let strategy = SupervisorSpec::with_strategy(Strategy::OneForAll);
+        let strategy = supervisor::with_strategy(supervisor::Strategy::OneForAll);
 
         let subtree_listener = trigger_listener.clone();
 
         let subtree_spec =
-            SupervisorSpec::new("subtree", vec![restart_tolerance, strategy], move || {
+            supervisor::Spec::new("subtree", vec![restart_tolerance, strategy], move || {
                 let subtree_listener = subtree_listener.clone();
                 let max_err_count = 1;
                 let worker =

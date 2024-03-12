@@ -51,14 +51,16 @@ impl StartTimedOut {
 /// Since: 0.0.0
 #[derive(Debug, Error)]
 pub enum StartError {
+    /// returned when the worker start logic takes too long
     #[error("{0}")]
     StartTimedOut(Arc<StartTimedOut>),
+    /// returned when the worker start logic finishes with an error
     #[error("{0}")]
     StartFailed(Arc<StartFailed>),
 }
 
 /// Represents an error returned by a `capataz::Node` business logic. This error
-/// the is propagated to supervisors which then would trigger a restart
+/// then is propagated to supervisors which then would trigger a restart
 /// procedure.
 ///
 /// Since: 0.0.0
@@ -79,6 +81,7 @@ impl RuntimeFailed {
             err,
         }
     }
+    /// returns the runtime name of the worker that failed
     pub fn get_runtime_name(&self) -> &str {
         &self.runtime_name
     }
@@ -96,15 +99,17 @@ pub struct TerminationFailed {
 }
 
 impl TerminationFailed {
-    pub(crate) fn new<S>(runtime_name: S, termination_err: anyhow::Error) -> Self
-    where
-        S: Into<String>,
-    {
-        Self {
-            runtime_name: runtime_name.into(),
-            termination_err,
-        }
-    }
+    // pub(crate) fn new<S>(runtime_name: S, termination_err: anyhow::Error) -> Self
+    // where
+    //     S: Into<String>,
+    // {
+    //     Self {
+    //         runtime_name: runtime_name.into(),
+    //         termination_err,
+    //     }
+    // }
+
+    /// returns the runtime name of the worker that failed
     pub fn get_runtime_name(&self) -> &str {
         &self.runtime_name
     }
@@ -130,6 +135,7 @@ impl TerminationTimedOut {
         }
     }
 
+    /// returns the runtime name of the worker that failed
     pub fn get_runtime_name(&self) -> &str {
         &self.runtime_name
     }
@@ -155,6 +161,7 @@ impl TerminationPanicked {
         }
     }
 
+    /// returns the runtime name of the worker that failed
     pub fn get_runtime_name(&self) -> &str {
         &self.runtime_name
     }
@@ -172,15 +179,16 @@ pub struct RuntimePanicked {
 }
 
 impl RuntimePanicked {
-    pub(crate) fn new<S>(runtime_name: S) -> Self
-    where
-        S: Into<String>,
-    {
-        Self {
-            runtime_name: runtime_name.into(),
-        }
-    }
+    // pub(crate) fn new<S>(runtime_name: S) -> Self
+    // where
+    //     S: Into<String>,
+    // {
+    //     Self {
+    //         runtime_name: runtime_name.into(),
+    //     }
+    // }
 
+    /// returns the runtime name of the worker that failed
     pub fn get_runtime_name(&self) -> &str {
         &self.runtime_name
     }
@@ -192,19 +200,25 @@ impl RuntimePanicked {
 /// Since: 0.0.0
 #[derive(Debug, Error)]
 pub enum TerminationMessage {
+    /// returned when the termination logic finishes with an error
     #[error("{0}")]
     TerminationFailed(Arc<TerminationFailed>),
+    /// returned when the termination logic takes too long
     #[error("{0}")]
     TerminationTimedOut(Arc<TerminationTimedOut>),
+    /// returned when the termination logic fails with a panic
     #[error("{0}")]
     TerminationPanicked(Arc<TerminationPanicked>),
+    /// returned when the worker business logic function fails with a panic
     #[error("{0}")]
     RuntimePanicked(Arc<RuntimePanicked>),
+    /// returned when the worker failed with an error
     #[error("{0}")]
     RuntimeFailed(Arc<RuntimeFailed>),
 }
 
 impl TerminationMessage {
+    /// returns the runtime name of the worker that failed
     pub fn get_runtime_name(&self) -> &str {
         match &self {
             TerminationMessage::TerminationFailed(termination_err) => {
@@ -221,6 +235,7 @@ impl TerminationMessage {
         }
     }
 
+    /// returns the original error that made this worker fail
     pub fn get_cause_err(&self) -> anyhow::Error {
         match &self {
             TerminationMessage::TerminationFailed(termination_err) => {

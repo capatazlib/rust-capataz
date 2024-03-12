@@ -31,6 +31,7 @@ impl RestartManager {
     }
 
     /// Returns the current restart count
+    #[cfg(test)]
     pub(crate) fn get_restart_count(&self) -> u32 {
         self.restart_count
     }
@@ -157,10 +158,12 @@ impl TooManyRestarts {
         &self.supervisor_name
     }
 
+    #[cfg(test)]
     pub(crate) fn get_first_error(&self) -> &anyhow::Error {
         &self.first_error
     }
 
+    #[cfg(test)]
     pub(crate) fn get_last_error(&self) -> Option<&anyhow::Error> {
         self.last_error.as_ref()
     }

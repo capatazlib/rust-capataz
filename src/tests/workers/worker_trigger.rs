@@ -1,5 +1,5 @@
-use crate::{Context, Node, Worker, WorkerOpt};
-use anyhow::anyhow;
+use crate::prelude::*;
+use crate::Context;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -79,7 +79,7 @@ impl WorkerTriggerListener {
     pub(crate) fn to_fail_runtime_worker<S>(
         self,
         name: S,
-        opts: Vec<WorkerOpt>,
+        opts: Vec<worker::Opt>,
         max_fail_count: u32,
     ) -> Node
     where
@@ -88,7 +88,7 @@ impl WorkerTriggerListener {
         let data = self.0;
 
         // Build the worker that we are going to use for tests
-        let node = Worker::new(name, opts, move |ctx: Context| {
+        let node = worker::Spec::new(name, opts, move |ctx: Context| {
             // Clone the signaler for every time we return a new worker routine
             let mut data = data.clone();
 
@@ -121,7 +121,7 @@ impl WorkerTriggerListener {
     pub(crate) fn to_success_termination_worker<S>(
         self,
         name: S,
-        opts: Vec<WorkerOpt>,
+        opts: Vec<worker::Opt>,
         max_termination_count: u32,
     ) -> Node
     where
@@ -130,7 +130,7 @@ impl WorkerTriggerListener {
         let data = self.0;
 
         // Build the worker that we are going to use for tests
-        let node = Worker::new(name, opts, move |ctx: Context| {
+        let node = worker::Spec::new(name, opts, move |ctx: Context| {
             // Clone the signaler for every time we return a new worker routine
             let mut data = data.clone();
 

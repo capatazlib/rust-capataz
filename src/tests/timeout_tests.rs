@@ -1,15 +1,16 @@
-use tokio::time::{self, Duration};
+use tokio::time;
 
+use crate::prelude::*;
 use crate::tests::workers::*;
-use crate::{Context, EventAssert, EventListener, SupervisorSpec, Worker};
+use crate::{Context, EventAssert, EventListener};
 
 #[tokio::test]
 async fn test_worker_with_start_timeout() {
     time::pause();
-    let spec = SupervisorSpec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
         vec![never_start_worker(
             "worker",
-            vec![Worker::with_start_timeout(Duration::from_secs(1))],
+            vec![worker::with_start_timeout(Duration::from_secs(1))],
         )]
     });
 
@@ -37,10 +38,10 @@ async fn test_worker_with_start_timeout() {
 #[tokio::test]
 async fn test_worker_with_termination_timeout() {
     time::pause();
-    let spec = SupervisorSpec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
         vec![never_terminate_worker(
             "worker",
-            vec![Worker::with_termination_timeout(Duration::from_secs(1))],
+            vec![worker::with_termination_timeout(Duration::from_secs(1))],
         )]
     });
 
@@ -55,7 +56,7 @@ async fn test_worker_with_termination_timeout() {
     let termination = sup.terminate();
 
     // Wait more than the max termination duration
-    time::advance(time::Duration::from_secs(2)).await;
+    time::advance(Duration::from_secs(2)).await;
 
     let (result, _spec) = termination.await;
     match result {
@@ -70,7 +71,7 @@ async fn test_worker_with_termination_timeout() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_termination_failed("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");

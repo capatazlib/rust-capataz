@@ -7,9 +7,9 @@ use crate::task;
 
 /// Contains the types and logic to create, start and terminate leaf nodes
 /// (workers) in the supervision tree.
-pub(crate) mod leaf;
+pub mod leaf;
 /// Wraps the supervisor package into an interface that is used for subtrees.
-pub(crate) mod subtree;
+pub mod subtree;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -42,24 +42,24 @@ pub enum TerminationMessage {
     Leaf(#[from] leaf::TerminationMessage),
     #[error("{0}")]
     Subtree(#[from] subtree::TerminationMessage),
-    #[error("restart error: {0}")]
-    RestartError(StartError),
+    // #[error("restart error: {0}")]
+    // RestartError(StartError),
 }
 
 impl TerminationMessage {
-    pub fn get_cause_err(self) -> anyhow::Error {
-        match self {
-            TerminationMessage::Leaf(termination_err) => termination_err.get_cause_err(),
-            TerminationMessage::Subtree(termination_err) => anyhow::Error::new(termination_err),
-            TerminationMessage::RestartError(start_err) => anyhow::Error::new(start_err),
-        }
-    }
+    // pub fn get_cause_err(self) -> anyhow::Error {
+    //     match self {
+    //         TerminationMessage::Leaf(termination_err) => termination_err.get_cause_err(),
+    //         TerminationMessage::Subtree(termination_err) => anyhow::Error::new(termination_err),
+    //         TerminationMessage::RestartError(start_err) => anyhow::Error::new(start_err),
+    //     }
+    // }
 
     pub fn get_runtime_name(&self) -> &str {
         match &self {
             TerminationMessage::Leaf(termination_err) => termination_err.get_runtime_name(),
             TerminationMessage::Subtree(termination_err) => termination_err.get_runtime_name(),
-            TerminationMessage::RestartError(start_err) => start_err.get_runtime_name(),
+            // TerminationMessage::RestartError(start_err) => start_err.get_runtime_name(),
         }
     }
 
@@ -130,9 +130,9 @@ impl Node {
             .map_err(|(start_err, spec_node)| (start_err, Node(spec_node)))
     }
 
-    pub(crate) fn get_name(&self) -> &str {
-        self.0.get_name()
-    }
+    // pub(crate) fn get_name(&self) -> &str {
+    //     self.0.get_name()
+    // }
 }
 
 /// Represents the specification of a node in the supervision tree. This type
@@ -190,12 +190,12 @@ impl NodeSpec {
         }
     }
 
-    pub fn get_name(&self) -> &str {
-        match self {
-            NodeSpec::Leaf(leaf_spec) => leaf_spec.get_name(),
-            NodeSpec::Subtree(subtree_spec) => subtree_spec.get_name(),
-        }
-    }
+    // pub fn get_name(&self) -> &str {
+    //     match self {
+    //         NodeSpec::Leaf(leaf_spec) => leaf_spec.get_name(),
+    //         NodeSpec::Subtree(subtree_spec) => subtree_spec.get_name(),
+    //     }
+    // }
 }
 
 /// Represents the runtime of a node in the supervision tree. A value of this
@@ -213,12 +213,12 @@ pub(crate) enum RunningNode {
 }
 
 impl RunningNode {
-    pub(crate) fn get_runtime_name(&self) -> &str {
-        match self {
-            Self::Leaf(leaf) => leaf.get_runtime_name(),
-            Self::Subtree(subtree) => subtree.get_runtime_name(),
-        }
-    }
+    // pub(crate) fn get_runtime_name(&self) -> &str {
+    //     match self {
+    //         Self::Leaf(leaf) => leaf.get_runtime_name(),
+    //         Self::Subtree(subtree) => subtree.get_runtime_name(),
+    //     }
+    // }
 
     pub(crate) fn get_name(&self) -> &str {
         match self {

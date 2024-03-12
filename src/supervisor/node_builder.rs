@@ -1,7 +1,7 @@
 use super::spec::*;
 
 /// Internal representation of the closure function used by the
-/// `capataz::SupervisorSpec::new_with_cleanup` method.
+/// `supervisor::Spec::new_with_cleanup` method.
 ///
 pub(crate) struct BuildNodesFn(
     Box<dyn FnMut() -> Result<Nodes, anyhow::Error> + Send + Sync + 'static>,

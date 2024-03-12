@@ -36,3 +36,29 @@ impl Opt {
 pub fn with_restart(restart: task::Restart) -> Opt {
     return Opt::new(move |spec| spec.with_restart(restart.clone()));
 }
+
+/// Specifies how long a client API is willing to wait for the start of this
+/// `capataz::Node`.
+///
+/// If this configuration option is not specified, there is no timeout for
+/// the node start.
+///
+/// Since: 0.0.0
+pub fn with_start_timeout(duration: std::time::Duration) -> Opt {
+    Opt::new(move |task| {
+        task.with_startup(task::Startup::Timeout(duration.clone()));
+    })
+}
+
+/// Specifies how long a client API is willing to wait for the termination
+/// of this `capataz::Node`.
+///
+/// If this configuration option is not specified, there is no timeout
+/// for the node termination.
+///
+/// Since: 0.0.0
+pub fn with_termination_timeout(duration: std::time::Duration) -> Opt {
+    Opt::new(move |task| {
+        task.with_shutdown(task::Shutdown::Timeout(duration.clone()));
+    })
+}

@@ -1,11 +1,12 @@
+use crate::prelude::*;
 use crate::tests::workers::worker_trigger;
-use crate::{with_restart, Context, EventAssert, EventListener, Restart, SupervisorSpec};
+use crate::{Context, EventAssert, EventListener};
 
 #[tokio::test]
 async fn test_one_for_one_single_level_worker_does_not_restart_with_failure() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -13,7 +14,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_failure() {
 
         let worker = trigger_listener.to_fail_runtime_worker(
             "worker",
-            vec![with_restart(Restart::Temporary)],
+            vec![worker::with_restart(worker::Restart::Temporary)],
             max_err_count,
         );
 
@@ -31,7 +32,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_failure() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have started");
@@ -43,7 +44,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_failure() {
     ev_buffer
         .wait_till(
             EventAssert::worker_runtime_failed("/root/worker"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("worker should fail");
@@ -55,7 +56,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_failure() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have terminated");
@@ -78,7 +79,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_failure() {
 async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_termination() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -86,7 +87,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
 
         let worker = trigger_listener.to_success_termination_worker(
             "worker",
-            vec![with_restart(Restart::Temporary)],
+            vec![worker::with_restart(worker::Restart::Temporary)],
             max_termination_count,
         );
 
@@ -104,7 +105,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have started");
@@ -116,7 +117,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
     ev_buffer
         .wait_till(
             EventAssert::worker_terminated("/root/worker"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("worker should have terminated");
@@ -128,7 +129,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have terminated");

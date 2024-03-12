@@ -1,11 +1,12 @@
 use anyhow::anyhow;
 
+use crate::prelude::*;
 use crate::tests::workers::*;
-use crate::{Context, EventAssert, EventListener, SupervisorSpec};
+use crate::{Context, EventAssert, EventListener};
 
 #[tokio::test]
 async fn test_single_worker_start_and_termination() {
-    let spec = SupervisorSpec::new("root", vec![], || vec![wait_done_worker("worker", vec![])]);
+    let spec = supervisor::Spec::new("root", vec![], || vec![wait_done_worker("worker", vec![])]);
 
     let (ev_listener, mut ev_buffer) = EventListener::new_testing_listener().await;
     let sup = spec
@@ -37,7 +38,7 @@ async fn test_single_worker_start_and_termination() {
 
 #[tokio::test]
 async fn test_multiple_single_level_workers_start_and_termination() {
-    let spec = SupervisorSpec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
         vec![
             wait_done_worker("worker1", vec![]),
             wait_done_worker("worker2", vec![]),
@@ -58,7 +59,7 @@ async fn test_multiple_single_level_workers_start_and_termination() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -79,7 +80,7 @@ async fn test_multiple_single_level_workers_start_and_termination() {
 
 #[tokio::test]
 async fn test_multiple_single_level_fail_start_worker() {
-    let spec = SupervisorSpec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
         vec![
             wait_done_worker("worker1", vec![]),
             wait_done_worker("worker2", vec![]),
@@ -104,7 +105,7 @@ async fn test_multiple_single_level_fail_start_worker() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_start_failed("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -125,7 +126,7 @@ async fn test_multiple_single_level_fail_start_worker() {
 
 #[tokio::test]
 async fn test_single_level_supervisor_build_error() {
-    let spec = SupervisorSpec::new_with_cleanup("root", vec![], || {
+    let spec = supervisor::Spec::new_with_cleanup("root", vec![], || {
         Err(anyhow!("build failure"))?;
         let nodes = vec![];
         let cleanup = || Ok(());
@@ -147,7 +148,7 @@ async fn test_single_level_supervisor_build_error() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_build_failed("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -161,8 +162,8 @@ async fn test_single_level_supervisor_build_error() {
 
 #[tokio::test]
 async fn test_two_level_start_and_termination() {
-    let spec = SupervisorSpec::new("root", vec![], || {
-        let subtree_spec = SupervisorSpec::new("subtree", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
+        let subtree_spec = supervisor::Spec::new("subtree", vec![], || {
             vec![wait_done_worker("worker", vec![])]
         });
         vec![subtree_spec.subtree(vec![])]
@@ -200,8 +201,8 @@ async fn test_two_level_start_and_termination() {
 
 #[tokio::test]
 async fn test_two_level_nested_supervisor_build_error() {
-    let spec = SupervisorSpec::new("root", vec![], || {
-        let subtree_spec = SupervisorSpec::new_with_cleanup("subtree", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
+        let subtree_spec = supervisor::Spec::new_with_cleanup("subtree", vec![], || {
             // Usually, clients will never return an Err from a failure but instead would
             // use the ? operator.
             Err(anyhow!("build failure"))?;
@@ -245,21 +246,23 @@ async fn test_two_level_nested_supervisor_build_error() {
 
 #[tokio::test]
 async fn test_multi_level_start_and_termination() {
-    let spec = SupervisorSpec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
         let mut nodes = Vec::new();
         for i in 1..=3 {
-            let level_one_spec = SupervisorSpec::new(format!("subtree-{}", i), vec![], move || {
-                let mut nodes = Vec::new();
-                for j in 1..=3 {
-                    let node_name = format!("worker-{}-{}", i, j);
-                    let level_two_spec =
-                        SupervisorSpec::new(format!("subtree-{}-{}", i, j), vec![], move || {
-                            vec![wait_done_worker(&node_name, vec![])]
-                        });
-                    nodes.push(level_two_spec.subtree(vec![]));
-                }
-                nodes
-            });
+            let level_one_spec =
+                supervisor::Spec::new(format!("subtree-{}", i), vec![], move || {
+                    let mut nodes = Vec::new();
+                    for j in 1..=3 {
+                        let node_name = format!("worker-{}-{}", i, j);
+                        let level_two_spec = supervisor::Spec::new(
+                            format!("subtree-{}-{}", i, j),
+                            vec![],
+                            move || vec![wait_done_worker(&node_name, vec![])],
+                        );
+                        nodes.push(level_two_spec.subtree(vec![]));
+                    }
+                    nodes
+                });
             nodes.push(level_one_spec.subtree(vec![]));
         }
         nodes

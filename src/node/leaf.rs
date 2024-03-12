@@ -3,7 +3,9 @@ mod opts;
 mod running_leaf;
 mod spec;
 
-pub(crate) use errors::*;
+pub use crate::task::{Restart, Shutdown, Startup};
+pub use errors::*;
 pub use opts::*;
 pub(crate) use running_leaf::*;
+pub use spec::Spec as Worker;
 pub use spec::*;

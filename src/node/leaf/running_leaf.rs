@@ -43,9 +43,9 @@ impl RunningLeaf {
         &self.name
     }
 
-    pub(crate) fn get_runtime_name(&self) -> &str {
-        &self.runtime_name
-    }
+    // pub(crate) fn get_runtime_name(&self) -> &str {
+    //     &self.runtime_name
+    // }
 
     pub(crate) fn get_restart(&self) -> task::Restart {
         self.task.get_restart()

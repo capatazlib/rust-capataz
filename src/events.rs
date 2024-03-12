@@ -1,11 +1,17 @@
 use std::boxed::Box;
-use std::sync::{Arc, Mutex};
-use std::time;
+use std::sync::Arc;
 
 use futures::future::{BoxFuture, Future, FutureExt};
-use tokio::sync::{broadcast, mpsc};
-use tokio::task::{self, JoinHandle};
-use tokio::time::{timeout_at, Instant};
+use tokio::sync::mpsc;
+
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+use tokio::sync::broadcast;
+#[cfg(test)]
+use tokio::task;
+#[cfg(test)]
+use tokio::time::{timeout_at, Duration, Instant};
 
 use crate::node::{leaf, subtree};
 use crate::supervisor;
@@ -120,9 +126,9 @@ impl EventNotifier {
 }
 
 impl EventNotifier {
-    pub(crate) fn empty() -> Self {
-        EventNotifier(EventListener::empty())
-    }
+    // pub(crate) fn empty() -> Self {
+    //     EventNotifier(EventListener::empty())
+    // }
 
     pub(crate) async fn supervisor_started(&mut self, runtime_name: &str) {
         let ev = Event::SupervisorStarted(NodeData {
@@ -250,19 +256,19 @@ impl EventNotifier {
         self.0.call(ev).await;
     }
 
-    pub(crate) async fn worker_runtime_panicked(
-        &mut self,
-        runtime_name: &str,
-        err: Arc<leaf::RuntimePanicked>,
-    ) {
-        let ev = Event::WorkerRuntimePanicked(
-            NodeData {
-                runtime_name: runtime_name.to_owned(),
-            },
-            err,
-        );
-        self.0.call(ev).await;
-    }
+    // pub(crate) async fn worker_runtime_panicked(
+    //     &mut self,
+    //     runtime_name: &str,
+    //     err: Arc<leaf::RuntimePanicked>,
+    // ) {
+    //     let ev = Event::WorkerRuntimePanicked(
+    //         NodeData {
+    //             runtime_name: runtime_name.to_owned(),
+    //         },
+    //         err,
+    //     );
+    //     self.0.call(ev).await;
+    // }
 
     pub(crate) async fn worker_termination_failed(
         &mut self,
@@ -312,13 +318,15 @@ impl EventNotifier {
 /// EventBufferCollector is an event listener that collects all the events that
 /// have been published by a supervision tree. It later can be used to assert
 /// events that have happened.
+#[cfg(test)]
 pub struct EventBufferCollector {
     events: Arc<Mutex<Vec<Event>>>,
     on_push: broadcast::Receiver<()>,
-    join_handle: JoinHandle<()>,
+    // join_handle: JoinHandle<()>,
     current_index: usize,
 }
 
+#[cfg(test)]
 impl EventBufferCollector {
     /// Creates a new EventBufferCollector from a `tokio::sync::mpsc::Reciever`.
     pub async fn from_mpsc(receiver: mpsc::Receiver<Event>) -> EventBufferCollector {
@@ -328,10 +336,10 @@ impl EventBufferCollector {
         let (notify_push, on_push) = broadcast::channel(10);
         // why 10? is an arbitrary number, we are not expecting this to collect
         // to many messages before they get read by consumers
-        let join_handle = task::spawn(run_event_collector(events.clone(), notify_push, receiver));
+        let _join_handle = task::spawn(run_event_collector(events.clone(), notify_push, receiver));
         EventBufferCollector {
             events,
-            join_handle,
+            // join_handle,
             on_push,
             current_index: 0,
         }
@@ -358,7 +366,7 @@ impl EventBufferCollector {
     pub async fn wait_till(
         &mut self,
         assert: EventAssert,
-        wait_duration: time::Duration,
+        wait_duration: Duration,
     ) -> Result<(), String> {
         loop {
             let events: Vec<Event> = self.get_events().await;
@@ -389,8 +397,10 @@ impl EventBufferCollector {
 
 /// EventAssert is a well-defined function that asserts properties from an Event
 /// emitted by a running supervision tree.
+#[cfg(test)]
 pub struct EventAssert(Box<dyn Fn(&Event) -> Option<String>>);
 
+#[cfg(test)]
 impl EventAssert {
     fn call(&self, ev: &Event) -> Option<String> {
         (*self.0)(ev)
@@ -695,6 +705,7 @@ impl EventAssert {
 
 /// run_event_collector is an internal function that receives supervision events
 /// from a channel and stores them on a thread-safe buffer.
+#[cfg(test)]
 async fn run_event_collector(
     events: Arc<Mutex<Vec<Event>>>,
     notify_push: broadcast::Sender<()>,

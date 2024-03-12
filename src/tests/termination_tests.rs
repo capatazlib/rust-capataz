@@ -1,11 +1,12 @@
 use anyhow::anyhow;
 
+use crate::prelude::*;
 use crate::tests::workers::*;
-use crate::{with_restart, Context, EventAssert, EventListener, Restart, SupervisorSpec};
+use crate::{Context, EventAssert, EventListener};
 
 #[tokio::test]
 async fn test_supervisor_termination_cleanup_error() {
-    let spec = SupervisorSpec::new_with_cleanup("root", vec![], || {
+    let spec = supervisor::Spec::new_with_cleanup("root", vec![], || {
         let nodes = vec![wait_done_worker("worker", vec![])];
         let cleanup = || Err(anyhow!("failing on cleanup"));
         Ok((nodes, cleanup))
@@ -29,7 +30,7 @@ async fn test_supervisor_termination_cleanup_error() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_termination_failed("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -46,8 +47,8 @@ async fn test_supervisor_termination_cleanup_error() {
 
 #[tokio::test]
 async fn test_two_level_nested_supervisor_termination_cleanup_failure() {
-    let spec = SupervisorSpec::new("root", vec![], || {
-        let subtree_spec = SupervisorSpec::new_with_cleanup("subtree", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], || {
+        let subtree_spec = supervisor::Spec::new_with_cleanup("subtree", vec![], || {
             let nodes = vec![wait_done_worker("worker", vec![])];
             let cleanup = || Err(anyhow!("failing on cleanup"));
             Ok((nodes, cleanup))
@@ -68,7 +69,7 @@ async fn test_two_level_nested_supervisor_termination_cleanup_failure() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_termination_failed("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -89,12 +90,12 @@ async fn test_two_level_nested_supervisor_termination_cleanup_failure() {
 async fn temporary_children_terminate_without_errors() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         let trigger_listener = trigger_listener.clone();
         let max_termination_count = 1;
         let worker = trigger_listener.to_success_termination_worker(
             "one",
-            vec![with_restart(Restart::Temporary)],
+            vec![worker::with_restart(worker::Restart::Temporary)],
             max_termination_count,
         );
 
@@ -112,7 +113,7 @@ async fn temporary_children_terminate_without_errors() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -123,7 +124,7 @@ async fn temporary_children_terminate_without_errors() {
     ev_buffer
         .wait_till(
             EventAssert::worker_terminated("/root/one"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");
@@ -134,7 +135,7 @@ async fn temporary_children_terminate_without_errors() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("event should happen");

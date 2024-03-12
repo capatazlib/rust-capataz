@@ -17,9 +17,9 @@ pub struct StartFailed {
     termination_err: Option<TerminationMessage>,
 }
 
-/// Represents an error reported by the capataz API that indicates a SupervisorSpec
+/// Represents an error reported by the capataz API that indicates a `supervisor::Spec`
 /// could not build the nodes because of an allocation resource error. This is usually
-/// seen when using `capataz::SupervisorSpec::new_with_cleanup`.
+/// seen when using `supervisor::Spec::new_with_cleanup`.
 ///
 /// Since: 0.0.0
 #[derive(Debug, Error)]
@@ -30,13 +30,15 @@ pub struct BuildFailed {
 }
 
 /// Unifies all possible errors that are reported when starting a
-/// `capataz::SupervisorSpec`.
+/// `supervisor::Spec`.
 ///
 /// Since: 0.0.0
 #[derive(Debug, Error)]
 pub enum StartError {
+    /// returns when a supervised worker failed to start running
     #[error("{0}")]
     StartFailed(Arc<StartFailed>),
+    /// returns when the supervisor's worker builder function returns an error
     #[error("{0}")]
     BuildFailed(Arc<BuildFailed>),
 }
@@ -82,6 +84,7 @@ pub struct TerminationFailed {
 }
 
 impl TerminationFailed {
+    /// returns the runtime name of the supervisor that failed
     pub fn get_runtime_name(&self) -> &str {
         &self.runtime_name
     }
@@ -93,17 +96,22 @@ impl TerminationFailed {
 /// Since: 0.0.0
 #[derive(Debug, Error)]
 pub enum TerminationMessage {
+    /// returned when the supervisor failed to terminate
     #[error("{0}")]
     TerminationFailed(Arc<TerminationFailed>),
     #[error("{0}")]
+    /// returned when the supervisor failed too many times
     TooManyRestarts(Arc<supervisor::TooManyRestarts>),
     #[error("{0}")]
+    /// returned when a worker failed to restart
     StartErrorOnRestart(Arc<node::StartError>),
+    /// returned when a start error was already returned. This is an implementation detail
     #[error("start error already reported")]
     StartErrorAlreadyReported,
 }
 
 impl TerminationMessage {
+    /// returns the name of the supervisor that failed to terminate
     pub fn get_runtime_name(&self) -> &str {
         match &self {
             Self::TerminationFailed(termination_err) => termination_err.get_runtime_name(),
@@ -115,6 +123,7 @@ impl TerminationMessage {
         }
     }
 
+    /// returns the original error that caused the supervisor to fail
     pub fn get_cause_err(self) -> anyhow::Error {
         match self {
             Self::TerminationFailed(termination_err) => anyhow::Error::new(termination_err),

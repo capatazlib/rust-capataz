@@ -453,6 +453,7 @@ where
     /// This blocking is necessary to ensure that supervised trees get spawned
     /// in the specified/expected order.
     ///
+    #[cfg(test)]
     pub(crate) async fn start_(
         self,
         parent_ctx: &Context,
@@ -463,9 +464,9 @@ where
             .map_err(|(err, _)| err)
     }
 
-    pub(crate) fn get_restart(&self) -> Restart {
-        self.restart.clone()
-    }
+    // pub(crate) fn get_restart(&self) -> Restart {
+    //     self.restart.clone()
+    // }
 }
 
 #[cfg(test)]

@@ -1,13 +1,12 @@
-use tokio::time;
-
+use crate::prelude::*;
 use crate::tests::workers::worker_trigger;
-use crate::{with_restart, Context, EventAssert, EventListener, Restart, SupervisorSpec};
+use crate::{Context, EventAssert, EventListener};
 
 #[tokio::test]
 async fn test_one_for_one_single_level_worker_restart_with_failure() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -15,7 +14,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
 
         let worker = trigger_listener.to_fail_runtime_worker(
             "worker",
-            vec![with_restart(Restart::Transient)],
+            vec![worker::with_restart(worker::Restart::Transient)],
             max_err_count,
         );
 
@@ -81,7 +80,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
 async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_termination() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move || {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -89,7 +88,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
 
         let worker = trigger_listener.to_success_termination_worker(
             "worker",
-            vec![with_restart(Restart::Transient)],
+            vec![worker::with_restart(worker::Restart::Transient)],
             max_termination_count,
         );
 
@@ -107,7 +106,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have started");
@@ -119,7 +118,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
     ev_buffer
         .wait_till(
             EventAssert::worker_terminated("/root/worker"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("worker should have terminated");
@@ -131,7 +130,7 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
     ev_buffer
         .wait_till(
             EventAssert::supervisor_terminated("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have terminated");
@@ -153,11 +152,11 @@ async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_terminati
 async fn test_one_for_one_single_level_worker_too_many_restart() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = SupervisorSpec::new(
+    let spec = supervisor::Spec::new(
         "root",
-        vec![SupervisorSpec::with_restart_tolerance(
+        vec![supervisor::with_restart_tolerance(
             0,
-            time::Duration::from_secs(5),
+            Duration::from_secs(5),
         )],
         move || {
             // clone the signaler reference every time we restart the
@@ -166,7 +165,7 @@ async fn test_one_for_one_single_level_worker_too_many_restart() {
             let max_err_count = 1;
             let worker = trigger_listener.to_fail_runtime_worker(
                 "worker",
-                vec![with_restart(Restart::Transient)],
+                vec![worker::with_restart(worker::Restart::Transient)],
                 max_err_count,
             );
             vec![worker]
@@ -184,7 +183,7 @@ async fn test_one_for_one_single_level_worker_too_many_restart() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_started("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have started");
@@ -196,7 +195,7 @@ async fn test_one_for_one_single_level_worker_too_many_restart() {
     ev_buffer
         .wait_till(
             EventAssert::worker_started("/root/worker"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("worker should have re-started");
@@ -208,7 +207,7 @@ async fn test_one_for_one_single_level_worker_too_many_restart() {
     ev_buffer
         .wait_till(
             EventAssert::supervisor_restarted_too_many_times("/root"),
-            std::time::Duration::from_millis(250),
+            Duration::from_millis(250),
         )
         .await
         .expect("supervisor should have failed");
