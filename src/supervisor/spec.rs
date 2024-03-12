@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 
 use lazy_static::lazy_static;
@@ -59,23 +60,14 @@ pub struct Spec {
     restart_window: time::Duration,
 }
 
-#[derive(Debug)]
-struct SpecDebug {
-    name: String,
-    start_order: StartOrder,
-    max_allowed_restarts: u32,
-    restart_window: time::Duration,
-}
-
-impl std::fmt::Debug for Spec {
-    fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let debug = SpecDebug {
-            name: self.name.clone(),
-            start_order: self.start_order.clone(),
-            max_allowed_restarts: self.max_allowed_restarts,
-            restart_window: self.restart_window.clone(),
-        };
-        debug.fmt(format)
+impl fmt::Debug for Spec {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        fmt.debug_struct("Spec")
+            .field("name", &self.name)
+            .field("start_order", &self.start_order)
+            .field("max_allowed_restarts", &self.max_allowed_restarts)
+            .field("restart_window", &self.restart_window)
+            .finish()
     }
 }
 

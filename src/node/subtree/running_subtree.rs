@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::events::EventNotifier;
 use crate::node::{self, leaf};
 use crate::supervisor;
@@ -15,22 +17,13 @@ pub(crate) struct RunningSubtree {
     strategy: node::Strategy,
 }
 
-/// Internal value to allow RunningLeaf to implement the Debug trait
-#[derive(Debug)]
-struct RunningSubtreeDebug {
-    runtime_name: String,
-    spec: supervisor::Spec,
-    strategy: node::Strategy,
-}
-
-impl std::fmt::Debug for RunningSubtree {
-    fn fmt(&self, format: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let data = RunningSubtreeDebug {
-            runtime_name: self.runtime_name.clone(),
-            spec: self.spec.clone(),
-            strategy: self.strategy.clone(),
-        };
-        data.fmt(format)
+impl fmt::Debug for RunningSubtree {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        fmt.debug_struct("RunningSubtree")
+            .field("runtime_name", &self.runtime_name)
+            .field("spec", &self.spec)
+            .field("strategy", &self.strategy)
+            .finish()
     }
 }
 
