@@ -7,7 +7,7 @@ use crate::{Context, EventAssert, EventListener};
 #[tokio::test]
 async fn test_worker_with_start_timeout() {
     time::pause();
-    let spec = supervisor::Spec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], |_ctx| {
         vec![never_start_worker(
             "worker",
             vec![worker::with_start_timeout(Duration::from_secs(1))],
@@ -38,7 +38,7 @@ async fn test_worker_with_start_timeout() {
 #[tokio::test]
 async fn test_worker_with_termination_timeout() {
     time::pause();
-    let spec = supervisor::Spec::new("root", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], |_ctx| {
         vec![never_terminate_worker(
             "worker",
             vec![worker::with_termination_timeout(Duration::from_secs(1))],

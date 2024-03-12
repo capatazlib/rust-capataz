@@ -6,7 +6,7 @@ use crate::{Context, EventAssert, EventListener};
 async fn test_one_for_one_single_level_worker_restart_with_failure() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = supervisor::Spec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move |_ctx| {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -80,7 +80,7 @@ async fn test_one_for_one_single_level_worker_restart_with_failure() {
 async fn test_one_for_one_single_level_worker_does_not_restart_with_ok_termination() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = supervisor::Spec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move |_ctx| {
         // clone the signaler reference every time we restart the
         // supervision tree. In this test-case it should happen only once.
         let trigger_listener = trigger_listener.clone();
@@ -158,7 +158,7 @@ async fn test_one_for_one_single_level_worker_too_many_restart() {
             0,
             Duration::from_secs(5),
         )],
-        move || {
+        move |_ctx| {
             // clone the signaler reference every time we restart the
             // supervision tree. In this test-case it should happen only once.
             let trigger_listener = trigger_listener.clone();

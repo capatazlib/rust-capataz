@@ -6,7 +6,7 @@ use crate::{Context, EventAssert, EventListener};
 
 #[tokio::test]
 async fn test_supervisor_termination_cleanup_error() {
-    let spec = supervisor::Spec::new_with_cleanup("root", vec![], || {
+    let spec = supervisor::Spec::new_with_cleanup("root", vec![], |_ctx| {
         let nodes = vec![wait_done_worker("worker", vec![])];
         let cleanup = || Err(anyhow!("failing on cleanup"));
         Ok((nodes, cleanup))
@@ -47,8 +47,8 @@ async fn test_supervisor_termination_cleanup_error() {
 
 #[tokio::test]
 async fn test_two_level_nested_supervisor_termination_cleanup_failure() {
-    let spec = supervisor::Spec::new("root", vec![], || {
-        let subtree_spec = supervisor::Spec::new_with_cleanup("subtree", vec![], || {
+    let spec = supervisor::Spec::new("root", vec![], |_ctx| {
+        let subtree_spec = supervisor::Spec::new_with_cleanup("subtree", vec![], |_ctx| {
             let nodes = vec![wait_done_worker("worker", vec![])];
             let cleanup = || Err(anyhow!("failing on cleanup"));
             Ok((nodes, cleanup))
@@ -90,7 +90,7 @@ async fn test_two_level_nested_supervisor_termination_cleanup_failure() {
 async fn temporary_children_terminate_without_errors() {
     let (worker_triggerer, trigger_listener) = worker_trigger::new();
 
-    let spec = supervisor::Spec::new("root", vec![], move || {
+    let spec = supervisor::Spec::new("root", vec![], move |_ctx| {
         let trigger_listener = trigger_listener.clone();
         let max_termination_count = 1;
         let worker = trigger_listener.to_success_termination_worker(

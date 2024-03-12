@@ -83,11 +83,11 @@ impl Spec {
     pub fn new<S, F>(name: S, mut opts: Vec<Opt>, mut build_nodes_fn: F) -> Self
     where
         S: Into<String>,
-        F: (FnMut() -> Vec<Node>) + Send + Sync + 'static,
+        F: (FnMut(Context) -> Vec<Node>) + Send + Sync + 'static,
     {
         let name = name.into();
-        let build_nodes_fn = move || {
-            let nodes = build_nodes_fn();
+        let build_nodes_fn = move |ctx| {
+            let nodes = build_nodes_fn(ctx);
             Ok(Nodes::new(nodes))
         };
         let build_nodes_fn = Arc::new(Mutex::new(BuildNodesFn::new(build_nodes_fn)));
@@ -156,10 +156,10 @@ impl Spec {
     where
         S: Into<String>,
         R: Into<Nodes>,
-        F: FnMut() -> Result<R, anyhow::Error> + Send + Sync + 'static,
+        F: FnMut(Context) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
-        let build_nodes_fn = move || -> Result<Nodes, anyhow::Error> {
-            let result = build_nodes_fn()?;
+        let build_nodes_fn = move |ctx| -> Result<Nodes, anyhow::Error> {
+            let result = build_nodes_fn(ctx)?;
             Ok(result.into())
         };
 
@@ -340,7 +340,7 @@ impl Spec {
 
         // Build the subtree nodes of this supervisor.
         let mut build_nodes_fn = self.build_nodes_fn.lock().await;
-        let result = build_nodes_fn.call();
+        let result = build_nodes_fn.call(ctx.with_runtime_name(&runtime_name));
         std::mem::drop(build_nodes_fn);
 
         match result {
